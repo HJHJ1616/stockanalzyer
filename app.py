@@ -1,13 +1,13 @@
-import streamlit as st
+ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (Ver.9)")
+st.title("🚀 Quant Dashboard (Ver. 10)")
 
 st.warning("⚠️ **[백테스트 로직 안내] 현금 방치형 (Cash Drag) 적용:** \n"
            "설정한 '매도일' 이후(또는 '매수일' 이전)의 자산은 추가 손익 없이 **수익률 0%의 '현금' 상태로 방치**되는 것으로 계산됩니다.")
@@ -61,23 +61,35 @@ if total_weight == 0:
     st.sidebar.error("비중의 합이 0이 될 수 없습니다.")
     st.stop()
 
-# 2. 데이터 가져오기 (단기 & 장기 분리)
+# 2. 데이터 가져오기 (🔥 여기서 에러 완벽 해결!)
 @st.cache_data
 def load_data(ticker_list, start, end):
     df = yf.download(ticker_list, start=start, end=end, progress=False)['Close']
     if isinstance(df, pd.Series):
         df = df.to_frame(name=ticker_list[0])
-    return df.dropna()
+    return df
 
-with st.spinner('시장 데이터를 분석 중입니다... ⏳'):
-    # 효진님이 선택한 기간의 데이터 (차트 및 영수증용)
-    data = load_data(tickers, global_start, global_end)
-    # 몬테카를로 시뮬레이션용 초장기 데이터 (2010년부터 현재까지 약 15년치 싹쓸이)
-    long_term_data = load_data(tickers, "2010-01-01", datetime.today().strftime('%Y-%m-%d'))
+with st.spinner('시장 빅데이터를 분석 중입니다... ⏳'):
+    # 한 번의 호출로 2010년부터의 데이터를 전부 가져옵니다. (컬럼 증발 방지)
+    raw_data = load_data(tickers, "2010-01-01", datetime.today().strftime('%Y-%m-%d'))
+    
+    if raw_data.empty:
+        st.error("데이터를 불러오지 못했습니다. 티커를 확인해주세요.")
+        st.stop()
 
-if data.empty or long_term_data.empty:
-    st.error("해당 기간의 데이터가 없습니다.")
+    # 1. 사용자가 설정한 과거 백테스트용 데이터 (해당 기간만 자르기)
+    mask = (raw_data.index >= pd.to_datetime(global_start)) & (raw_data.index <= pd.to_datetime(global_end))
+    data = raw_data.loc[mask].dropna()
+    
+    # 2. AI 예측용 15년치 빅데이터 (결측치 없는 최대 길이의 데이터만 추출)
+    long_term_data = raw_data.dropna()
+
+if data.empty:
+    st.error("설정한 기간에 데이터가 없습니다. 주말/휴일이거나 아직 상장 전인 종목일 수 있습니다.")
     st.stop()
+
+if long_term_data.empty or len(long_term_data) < 21:
+    long_term_data = data # 너무 최신 종목만 있으면 단기 데이터로 자동 대체
 
 # 3. 실전 Buy & Hold 계산
 daily_returns = data.pct_change().dropna()
@@ -90,37 +102,38 @@ for ticker in tickers:
     t_start = ticker_settings[ticker]['start']
     t_end = ticker_settings[ticker]['end']
     
-    t_ret = daily_returns[ticker].copy()
-    t_ret.loc[t_ret.index < t_start] = 0.0
-    t_ret.loc[t_ret.index > t_end] = 0.0
-    
-    t_cum = (1 + t_ret).cumprod()
-    adjusted_cum_returns[ticker] = t_cum * 100 
-    portfolio_value += t_cum * norm_w
-
-    valid_dates = data[ticker].dropna().index
-    try:
-        buy_date = valid_dates[valid_dates >= t_start].min()
-        sell_date = valid_dates[valid_dates <= t_end].max()
-        buy_price = data.loc[buy_date, ticker]
-        sell_price = data.loc[sell_date, ticker]
-        allocated_cash = initial_investment * norm_w
-        final_cash = allocated_cash * (sell_price / buy_price)
-        profit_cash = final_cash - allocated_cash
+    if ticker in daily_returns.columns:
+        t_ret = daily_returns[ticker].copy()
+        t_ret.loc[t_ret.index < t_start] = 0.0
+        t_ret.loc[t_ret.index > t_end] = 0.0
         
-        receipt_data.append({
-            "종목": ticker,
-            "매수일": buy_date.strftime('%Y-%m-%d'),
-            "매수 단가 (현지)": round(buy_price, 2),
-            "매도일": sell_date.strftime('%Y-%m-%d'),
-            "매도 단가 (현지)": round(sell_price, 2),
-            f"투자 원금({sym})": round(allocated_cash, 2),
-            f"최종 평가액({sym})": round(final_cash, 2),
-            f"손익금({sym})": round(profit_cash, 2),
-            "수익률(%)": round((sell_price/buy_price - 1)*100, 2)
-        })
-    except:
-        pass 
+        t_cum = (1 + t_ret).cumprod()
+        adjusted_cum_returns[ticker] = t_cum * 100 
+        portfolio_value += t_cum * norm_w
+
+        valid_dates = data[ticker].dropna().index
+        try:
+            buy_date = valid_dates[valid_dates >= t_start].min()
+            sell_date = valid_dates[valid_dates <= t_end].max()
+            buy_price = data.loc[buy_date, ticker]
+            sell_price = data.loc[sell_date, ticker]
+            allocated_cash = initial_investment * norm_w
+            final_cash = allocated_cash * (sell_price / buy_price)
+            profit_cash = final_cash - allocated_cash
+            
+            receipt_data.append({
+                "종목": ticker,
+                "매수일": buy_date.strftime('%Y-%m-%d'),
+                "매수 단가 (현지)": round(buy_price, 2),
+                "매도일": sell_date.strftime('%Y-%m-%d'),
+                "매도 단가 (현지)": round(sell_price, 2),
+                f"투자 원금({sym})": round(allocated_cash, 2),
+                f"최종 평가액({sym})": round(final_cash, 2),
+                f"손익금({sym})": round(profit_cash, 2),
+                "수익률(%)": round((sell_price/buy_price - 1)*100, 2)
+            })
+        except:
+            pass 
 
 cum_returns = portfolio_value * 100
 cum_returns.name = 'My Portfolio'
@@ -145,7 +158,7 @@ def calculate_stats(returns_series, is_price_series=False):
 port_tot, port_cagr, port_mdd = calculate_stats(cum_returns, is_price_series=True)
 
 # ---------------------------------------------------------
-# 📝 1. 과거 백테스트 요약 리포트 (설명 보강)
+# 📝 1. 과거 백테스트 요약 리포트
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📝 1. 과거 백테스트 성과 분석")
@@ -165,7 +178,7 @@ fig1.for_each_trace(lambda trace: trace.update(line=dict(width=4, color='#FF4B4B
 st.plotly_chart(fig1, use_container_width=True)
 
 # ---------------------------------------------------------
-# 🧾 2. 영수증 (설명 보강)
+# 🧾 2. 영수증
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader(f"🧾 2. 가상 매매 결산 영수증 (기준 통화: {sym})")
@@ -179,11 +192,11 @@ if receipt_data:
     st.dataframe(df_receipt.style.format("{:,.2f}", subset=["매수 단가 (현지)", "매도 단가 (현지)", f"투자 원금({sym})", f"최종 평가액({sym})", f"손익금({sym})", "수익률(%)"]).background_gradient(cmap='RdYlGn', subset=[f'손익금({sym})']), use_container_width=True)
 
 # ---------------------------------------------------------
-# 🎯 3. 승률 분석 (설명 보강 & 데이터 부족 이유 설명)
+# 🎯 3. 승률 분석
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("🎯 3. 이 조합으로 돈을 벌 확률 (보유 기간별 승률)")
-st.info("💡 **'데이터 부족'이 뜨는 이유:** 만약 조회 기간을 '1년'으로 설정하셨다면, '3년 보유 시 승률'은 과거 데이터 길이가 짧아서 계산할 수 없습니다. 이럴 땐 사이드바에서 [전체 시작일]을 5년 전으로 늘려보세요!")
+st.info("💡 **'데이터 부족'이 뜨는 이유:** 만약 조회 기간을 '1년'으로 설정하셨다면, '3년 보유 시 승률'은 과거 데이터 길이가 짧아서 수학적으로 계산할 수 없습니다. 이럴 땐 사이드바에서 [전체 시작일]을 5년 전으로 늘려보세요!")
 
 periods = {'1개월(단타)': 21, '6개월(스윙)': 126, '1년(장투)': 252, '3년(기절)': 252*3}
 win_rates = {}
@@ -204,25 +217,25 @@ st.table(df_win)
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader(f"🔮 4. 향후 3년 딥러닝 시뮬레이션 (최대 15년 빅데이터 기반)")
-st.write("사용자가 짧게 설정한 기간이 아니라, 해당 티커들의 과거 15년 치(2010년~) 롱텀 데이터(Long-term Data)를 AI가 싹 다 긁어와서 1,000번의 미래를 시뮬레이션합니다. (최근 상승장에만 취하지 않고, 과거의 폭락장까지 모두 학습한 현실적인 예측입니다.)")
+st.write("사용자가 짧게 설정한 기간이 아니라, 해당 티커들의 과거 15년 치(2010년~) 롱텀 데이터(Long-term Data)를 AI가 싹 다 긁어와서 1,000번의 미래를 시뮬레이션합니다. (최근 상승장에만 취하지 않고 과거 폭락장까지 학습합니다.)")
 
-# AI 장기 시뮬레이션을 위한 데이터 전처리 (현금 비중 섞기)
 lt_daily_returns = long_term_data.pct_change().dropna()
 lt_portfolio_return = pd.Series(0.0, index=lt_daily_returns.index)
 
+# 🔥 에러가 났던 부분 안전하게 수정 완료
 for ticker in tickers:
     norm_w = ticker_settings[ticker]['weight'] / total_weight
-    lt_portfolio_return += lt_daily_returns[ticker] * norm_w
+    if ticker in lt_daily_returns.columns:
+        lt_portfolio_return += lt_daily_returns[ticker] * norm_w
 
 sim_days = 252 * 3 
 num_simulations = 1000
 
-# 장기 데이터의 평균과 변동성 추출
 lt_mu = lt_portfolio_return.mean()
 lt_sigma = lt_portfolio_return.std()
 
 if lt_sigma == 0:
-    st.warning("변동성이 0입니다.")
+    st.warning("설정된 데이터의 변동성이 0입니다. 포트폴리오 비중이나 기간을 확인해 주세요.")
 else:
     np.random.seed(42)
     simulated_daily_returns = np.random.normal(lt_mu, lt_sigma, (sim_days, num_simulations))
@@ -248,7 +261,6 @@ else:
     final_50 = percentile_50[-1]
     final_90 = percentile_90[-1]
 
-    # AI 종합 코멘트 생성 로직
     st.markdown("### 🤖 시스템 종합 코멘트")
     
     if port_mdd < -30:
@@ -263,6 +275,6 @@ else:
     elif port_cagr > 8:
         return_comment = "📈 **안정적인 우상향:** 시장 평균(S&P 500) 수준의 든든한 수익률을 보여주고 있습니다."
     else:
-        return_comment = "🐢 **보수적인 성장:** 수익률보다는 안전성에 치중된 세팅입니다. 조금 더 공격적인 종목(SSO, QQQ 등)을 10% 정도 섞어보는 것도 좋습니다."
+        return_comment = "🐢 **보수적인 성장:** 수익률보다는 안전성에 치중된 세팅입니다. 조금 더 공격적인 종목을 10% 정도 섞어보는 것도 좋습니다."
 
-    st.success(f"{risk_comment}\n\n{return_comment}\n\n**🔮 3년 뒤 결산 시나리오:** 현재 세팅으로 **{sym}{initial_investment:,.0f}** 를 투자하고 3년 뒤 계좌를 열어보면, **평균적으로 {sym}{final_50:,.0f}** 가 되어 있을 확률이 가장 높습니다. (최악의 운이 작용해도 {sym}{final_10:,.0f} 는 방어할 것으로 예측됩니다.)")
+    st.success(f"{risk_comment}\n\n{return_comment}\n\n**🔮 3년 뒤 결산 시나리오:** 현재 세팅으로 **{sym}{initial_investment:,.0f}** 를 투자하고 3년 뒤 계좌를 열어보면, **평균적으로 {sym}{final_50:,.0f}** 가 되어 있을 확률이 가장 높습니다. (최악의 하락장이 와도 {sym}{final_10:,.0f} 는 방어할 것으로 예측됩니다.)")
