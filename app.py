@@ -5,8 +5,8 @@ import plotly.express as px
 import numpy as np
 from datetime import datetime
 
-st.set_page_config(layout="wide", page_title="효진 퀀트 대시보드")
-st.title("🚀 효진 프로 퀀트 대시보드 (심화 리포트)")
+st.set_page_config(layout="wide", page_title="Quant Dashboard")
+st.title("🚀 Quant Dashboard (Report)")
 
 # 1. 사이드바: 설정 영역
 st.sidebar.header("⚙️ 백테스트 설정")
