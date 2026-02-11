@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (ver3.")
+st.title("🚀 Quant Dashboard (ver. 3)")
 
 # 1. 사이드바: 설정 영역
 st.sidebar.header("⚙️ 백테스트 설정")
