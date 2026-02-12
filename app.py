@@ -10,7 +10,7 @@ import google.generativeai as genai
 
 # 🔥 1. 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (V33. Dropdown UI)")
+st.title("🚀 Quant Dashboard (V34. Total Recovery)")
 
 # ---------------------------------------------------------
 # 🔑 API 키 로딩 및 AI 설정
@@ -32,7 +32,7 @@ else:
         api_key = api_key_input
 
 # ---------------------------------------------------------
-# 2. 사이드바 및 시장 드롭다운 설정
+# 2. 사이드바 및 시장 드롭다운
 # ---------------------------------------------------------
 st.sidebar.header("📝 Portfolio Inputs")
 if st.sidebar.button("🔄 Refresh Data"):
@@ -42,23 +42,17 @@ if st.sidebar.button("🔄 Refresh Data"):
 target_currency = st.sidebar.radio("💱 Display Currency", ["KRW (₩)", "USD ($)"])
 target_sym = "₩" if target_currency == "KRW (₩)" else "$"
 
-# 초기 예시 데이터
 default_data = pd.DataFrame([
     {"Market": "🇺🇸 US", "Ticker": "SCHD", "Date": datetime(2023, 1, 15), "Price": 75.5, "Qty": 100},
     {"Market": "🇰🇷 KOSPI", "Ticker": "005930", "Date": datetime(2023, 6, 20), "Price": 72000.0, "Qty": 10},
     {"Market": "🇺🇸 Coin", "Ticker": "BTC-USD", "Date": datetime(2024, 1, 10), "Price": 45000.0, "Qty": 0.1},
 ])
 
-# 💡 [수정] Market 컬럼을 다시 드롭다운(SelectboxColumn)으로 복구!
 edited_df = st.sidebar.data_editor(
     default_data,
     num_rows="dynamic",
     column_config={
-        "Market": st.column_config.SelectboxColumn(
-            "Market", 
-            options=["🇺🇸 US", "🇰🇷 KOSPI", "🇰🇷 KOSDAQ", "🇺🇸 Coin"], 
-            required=True
-        ),
+        "Market": st.column_config.SelectboxColumn("Market", options=["🇺🇸 US", "🇰🇷 KOSPI", "🇰🇷 KOSDAQ", "🇺🇸 Coin"], required=True),
         "Ticker": st.column_config.TextColumn("Ticker", validate="^[A-Za-z0-9.-]+$"),
         "Date": st.column_config.DateColumn("Buy Date", format="YYYY-MM-DD"),
         "Price": st.column_config.NumberColumn("Price (Local)", min_value=0.01),
@@ -72,7 +66,7 @@ if edited_df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# 3. 데이터 로딩 및 처리 로직
+# 3. 데이터 로딩 및 처리
 # ---------------------------------------------------------
 with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     @st.cache_data(ttl=600)
@@ -97,15 +91,15 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     raw_data = raw_data_all.drop(columns=["KRW=X", "^GSPC"], errors='ignore')
     
     current_ex_rate = exchange_rate_history.iloc[-1]
+    earliest_date = pd.to_datetime(edited_df["Date"].min())
+    
     portfolio_history = pd.Series(0.0, index=raw_data.index)
     invested_history = pd.Series(0.0, index=raw_data.index)
     details = []
 
     for idx, row in edited_df.iterrows():
-        rt = ticker_map[row["Ticker"]]
-        buy_date = pd.to_datetime(row["Date"])
+        rt = ticker_map[row["Ticker"]]; buy_date = pd.to_datetime(row["Date"])
         is_usd = row["Market"] in ["🇺🇸 US", "🇺🇸 Coin"]
-        
         val_native = raw_data[rt] * float(row["Qty"])
         if target_currency == "KRW (₩)":
             val_converted = val_native * exchange_rate_history if is_usd else val_native
@@ -113,27 +107,17 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         else:
             val_converted = val_native if is_usd else val_native / exchange_rate_history
             invest_converted = (float(row["Price"]) * float(row["Qty"])) if is_usd else (float(row["Price"]) * float(row["Qty"])) / current_ex_rate
-
         val_converted.loc[val_converted.index < buy_date] = 0.0
         portfolio_history = portfolio_history.add(val_converted, fill_value=0)
-        
-        cap_val = pd.Series(0.0, index=raw_data.index)
-        cap_val.loc[cap_val.index >= buy_date] = invest_converted
+        cap_val = pd.Series(0.0, index=raw_data.index); cap_val.loc[cap_val.index >= buy_date] = invest_converted
         invested_history = invested_history.add(cap_val, fill_value=0)
+        details.append({"Ticker": row["Ticker"], "Qty": row["Qty"], "Avg Buy": row["Price"], "Current": raw_data[rt].iloc[-1], "Value": val_converted.iloc[-1], "Return (%)": ((raw_data[rt].iloc[-1] - row["Price"]) / row["Price"]) * 100})
 
-        details.append({
-            "Ticker": row["Ticker"], "Qty": row["Qty"], "Avg Buy": row["Price"],
-            "Current": raw_data[rt].iloc[-1], "Value": val_converted.iloc[-1],
-            "Return (%)": ((raw_data[rt].iloc[-1] - row["Price"]) / row["Price"]) * 100
-        })
-
-    total_invested = invested_history.iloc[-1]
-    current_value = portfolio_history.iloc[-1]
-    df_details = pd.DataFrame(details)
+    total_invested = invested_history.iloc[-1]; current_value = portfolio_history.iloc[-1]; df_details = pd.DataFrame(details)
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
 # ---------------------------------------------------------
-# 4. UI 출력 (대시보드 및 결산 표)
+# 4. UI 출력 (메트릭 & 성장 차트)
 # ---------------------------------------------------------
 st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2, c3 = st.columns(3)
@@ -143,26 +127,43 @@ c3.metric("Profit/Loss", f"{target_sym}{current_value-total_invested:,.0f}", del
 
 st.subheader("📈 Portfolio Growth")
 mask = portfolio_history > 0
-f_history = portfolio_history[mask]
-f_invested = invested_history[mask]
-
+f_history = portfolio_history[mask]; f_invested = invested_history[mask]
 fig_growth = go.Figure()
 fig_growth.add_trace(go.Scatter(x=f_history.index, y=f_history, name="자산 가치", line=dict(color='#FF4B4B', width=3)))
 fig_growth.add_trace(go.Scatter(x=f_invested.index, y=f_invested, name="투자 원금", line=dict(color='gray', dash='dash')))
-fig_growth.update_layout(hovermode="x unified", template="plotly_white")
 st.plotly_chart(fig_growth, use_container_width=True)
 
+# ---------------------------------------------------------
+# 🔥 5. 벤치마크 및 상관관계 히트맵 (완벽 복구!)
+# ---------------------------------------------------------
+st.markdown("---")
+col_bench, col_heat = st.columns(2)
+
+with col_bench:
+    st.subheader("🆚 vs S&P 500 (Benchmark)")
+    my_ret = (portfolio_history / invested_history - 1) * 100
+    sp_sliced = sp500_history.loc[earliest_date:]
+    sp_ret = (sp_sliced / sp_sliced.iloc[0] - 1) * 100
+    fig_b = go.Figure()
+    fig_b.add_trace(go.Scatter(x=my_ret[mask].index, y=my_ret[mask], name="내 포트폴리오", line=dict(color='#FF4B4B')))
+    fig_b.add_trace(go.Scatter(x=sp_ret.index, y=sp_ret, name="S&P 500", line=dict(color='blue', dash='dot')))
+    st.plotly_chart(fig_b, use_container_width=True)
+
+with col_heat:
+    st.subheader("🔥 Correlation Heatmap")
+    st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=True, color_continuous_scale="RdBu_r", zmin=-1, zmax=1), use_container_width=True)
+
+# 🧾 수익 결산 표
 st.subheader("🧾 Holdings Detail")
 st.dataframe(df_details.style.format({"Qty":"{:,.4f}", "Avg Buy":"{:,.2f}", "Current":"{:,.2f}", "Value":f"{target_sym}{{:,.0f}}", "Return (%)":"{:,.2f}%", "Weight (%)":"{:,.1f}%"}).background_gradient(cmap='RdYlGn', subset=['Return (%)']), use_container_width=True)
 
 # ---------------------------------------------------------
-# 5. 기술적 분석 (MA, BB, RSI)
+# 📊 6. 기술적 분석 (RSI, MA, BB 완벽 포함)
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 Technical Analysis")
-sel_ticker = st.selectbox("분석 종목 선택", df_details["Ticker"].unique())
-rt_sel = ticker_map[sel_ticker]
-tech_df = raw_data[rt_sel].to_frame(name="Close").iloc[-500:]
+sel_ticker = st.selectbox("종목 선택", df_details["Ticker"].unique())
+rt_sel = ticker_map[sel_ticker]; tech_df = raw_data[rt_sel].to_frame(name="Close").iloc[-500:]
 
 for ma in [5, 20, 60, 120, 200]: tech_df[f'MA{ma}'] = tech_df['Close'].rolling(window=ma).mean()
 tech_df['Std_20'] = tech_df['Close'].rolling(window=20).std()
@@ -182,7 +183,7 @@ fig_tech.update_layout(height=800, template="plotly_white", hovermode="x unified
 st.plotly_chart(fig_tech, use_container_width=True)
 
 # ---------------------------------------------------------
-# 6. Gemini AI 분석
+# 🤖 7. Gemini AI 분석 (안전 모델 탐색)
 # ---------------------------------------------------------
 st.markdown("---")
 if st.button("🤖 Analyze Portfolio with AI"):
@@ -192,12 +193,10 @@ if st.button("🤖 Analyze Portfolio with AI"):
         try:
             models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
             target_model = next((m for m in models if 'flash' in m), models[0] if models else None)
-            
-            if not target_model: st.error("❌ 사용 가능한 모델이 없습니다.")
-            else:
+            if target_model:
                 status.info(f"AI 분석 중... ({target_model}) ⏳")
                 model = genai.GenerativeModel(target_model)
                 summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
                 response = model.generate_content(f"다음 포트폴리오를 퀀트 관점에서 분석하고 한국어로 조언해줘:\n{summary}")
-                status.empty(); st.success(f"✅ 분석 완료! ({target_model})"); st.markdown(response.text)
+                status.empty(); st.success(f"✅ 분석 완료!"); st.markdown(response.text)
         except Exception as e: status.empty(); st.error(f"❌ 에러: {str(e)}")
