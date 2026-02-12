@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (Ver. 10)")
+st.title("🚀 Quant Dashboard (Ver.11)")
 
 st.warning("⚠️ **[백테스트 로직 안내] 현금 방치형 (Cash Drag) 적용:** \n"
            "설정한 '매도일' 이후(또는 '매수일' 이전)의 자산은 추가 손익 없이 **수익률 0%의 '현금' 상태로 방치**되는 것으로 계산됩니다.")
@@ -35,8 +35,9 @@ if not tickers:
     st.stop()
 
 st.sidebar.subheader("🗓️ 전체 백테스트 기간 (조회 기간)")
-global_start = st.sidebar.date_input("전체 시작일", pd.to_datetime("2020-01-01"))
-global_end = st.sidebar.date_input("전체 종료일", datetime.today())
+# 날짜 범위 제한 해제 (1980~현재)
+global_start = st.sidebar.date_input("전체 시작일", pd.to_datetime("2020-01-01"), min_value=pd.to_datetime("1980-01-01"), max_value=datetime.today())
+global_end = st.sidebar.date_input("전체 종료일", datetime.today(), min_value=pd.to_datetime("1980-01-01"), max_value=datetime.today())
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📦 종목별 상세 설정 (비중 및 매매일)")
@@ -47,8 +48,22 @@ total_weight = 0
 for ticker in tickers:
     with st.sidebar.expander(f"🔧 {ticker} 설정", expanded=True):
         w = st.slider(f"비중 (%)", 0, 100, 100 // len(tickers), key=f"weight_{ticker}")
-        t_start = st.date_input(f"매수일", global_start, key=f"start_{ticker}")
-        t_end = st.date_input(f"매도일", global_end, key=f"end_{ticker}")
+        
+        # 개별 종목 날짜 범위 제한 해제
+        t_start = st.date_input(
+            f"매수일", 
+            global_start, 
+            min_value=pd.to_datetime("1980-01-01"), 
+            max_value=datetime.today(),
+            key=f"start_{ticker}"
+        )
+        t_end = st.date_input(
+            f"매도일", 
+            global_end, 
+            min_value=pd.to_datetime("1980-01-01"), 
+            max_value=datetime.today(),
+            key=f"end_{ticker}"
+        )
         
         if t_start > t_end:
             st.sidebar.error(f"{ticker}의 매수일이 매도일보다 늦을 수 없습니다!")
@@ -61,35 +76,35 @@ if total_weight == 0:
     st.sidebar.error("비중의 합이 0이 될 수 없습니다.")
     st.stop()
 
-# 2. 데이터 가져오기 (🔥 여기서 에러 완벽 해결!)
+# 2. 데이터 가져오기
 @st.cache_data
 def load_data(ticker_list, start, end):
+    # yfinance 호출 시 progress=False로 설정하여 불필요한 출력 방지
     df = yf.download(ticker_list, start=start, end=end, progress=False)['Close']
     if isinstance(df, pd.Series):
         df = df.to_frame(name=ticker_list[0])
     return df
 
 with st.spinner('시장 빅데이터를 분석 중입니다... ⏳'):
-    # 한 번의 호출로 2010년부터의 데이터를 전부 가져옵니다. (컬럼 증발 방지)
+    # AI용 장기 데이터 (2010년부터 현재까지)
     raw_data = load_data(tickers, "2010-01-01", datetime.today().strftime('%Y-%m-%d'))
     
     if raw_data.empty:
         st.error("데이터를 불러오지 못했습니다. 티커를 확인해주세요.")
         st.stop()
 
-    # 1. 사용자가 설정한 과거 백테스트용 데이터 (해당 기간만 자르기)
+    # 사용자 설정 기간 데이터 필터링
     mask = (raw_data.index >= pd.to_datetime(global_start)) & (raw_data.index <= pd.to_datetime(global_end))
     data = raw_data.loc[mask].dropna()
-    
-    # 2. AI 예측용 15년치 빅데이터 (결측치 없는 최대 길이의 데이터만 추출)
     long_term_data = raw_data.dropna()
 
 if data.empty:
     st.error("설정한 기간에 데이터가 없습니다. 주말/휴일이거나 아직 상장 전인 종목일 수 있습니다.")
     st.stop()
 
+# 장기 데이터가 너무 짧으면(신규 상장주 등) 그냥 현재 데이터 사용
 if long_term_data.empty or len(long_term_data) < 21:
-    long_term_data = data # 너무 최신 종목만 있으면 단기 데이터로 자동 대체
+    long_term_data = data 
 
 # 3. 실전 Buy & Hold 계산
 daily_returns = data.pct_change().dropna()
@@ -104,6 +119,7 @@ for ticker in tickers:
     
     if ticker in daily_returns.columns:
         t_ret = daily_returns[ticker].copy()
+        # 현금 방치 로직: 매수일 전, 매도일 후는 수익률 0%
         t_ret.loc[t_ret.index < t_start] = 0.0
         t_ret.loc[t_ret.index > t_end] = 0.0
         
@@ -111,6 +127,7 @@ for ticker in tickers:
         adjusted_cum_returns[ticker] = t_cum * 100 
         portfolio_value += t_cum * norm_w
 
+        # 영수증 데이터 추출
         valid_dates = data[ticker].dropna().index
         try:
             buy_date = valid_dates[valid_dates >= t_start].min()
@@ -169,6 +186,7 @@ col1.metric("🔥 과거 누적 수익률", f"{port_tot:.2f}%", help="초기 자
 col2.metric("📈 연평균 수익률 (CAGR)", f"{port_cagr:.2f}%", help="복리 마법의 핵심! 매년 평균적으로 이만큼씩 자산이 성장했다는 뜻입니다.")
 col3.metric("📉 최대 낙폭 (MDD)", f"{port_mdd:.2f}%", help="투자 기간 중 가장 심하게 물렸을 때의 마이너스 비율입니다. (멘탈 테스트 지수)")
 
+# 차트 시작점 자동 조절 (가장 빠른 매수일 기준)
 earliest_buy_date = min([settings['start'] for settings in ticker_settings.values()])
 chart_data = adjusted_cum_returns[adjusted_cum_returns.index >= earliest_buy_date]
 
@@ -217,12 +235,12 @@ st.table(df_win)
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader(f"🔮 4. 향후 3년 딥러닝 시뮬레이션 (최대 15년 빅데이터 기반)")
-st.write("사용자가 짧게 설정한 기간이 아니라, 해당 티커들의 과거 15년 치(2010년~) 롱텀 데이터(Long-term Data)를 AI가 싹 다 긁어와서 1,000번의 미래를 시뮬레이션합니다. (최근 상승장에만 취하지 않고 과거 폭락장까지 학습합니다.)")
+st.write("사용자가 짧게 설정한 기간이 아니라, **해당 티커들의 과거 15년 치(2010년~) 롱텀 데이터(Long-term Data)를 AI가 싹 다 긁어와서** 1,000번의 미래를 시뮬레이션합니다. (최근 상승장에만 취하지 않고 과거 폭락장까지 학습합니다.)")
 
 lt_daily_returns = long_term_data.pct_change().dropna()
 lt_portfolio_return = pd.Series(0.0, index=lt_daily_returns.index)
 
-# 🔥 에러가 났던 부분 안전하게 수정 완료
+# 장기 데이터 매핑 (없는 종목은 자동으로 제외하여 에러 방지)
 for ticker in tickers:
     norm_w = ticker_settings[ticker]['weight'] / total_weight
     if ticker in lt_daily_returns.columns:
