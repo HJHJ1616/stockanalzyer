@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import numpy as np
 from datetime import datetime
 import google.generativeai as genai
@@ -69,7 +70,7 @@ if edited_df.empty:
 # ---------------------------------------------------------
 # 2. 데이터 처리 및 환율 계산
 # ---------------------------------------------------------
-with st.spinner('Fetching market data & Exchange rates... ⏳'):
+with st.spinner('Fetching market data, S&P 500 & Exchange rates... ⏳'):
     
     @st.cache_data(ttl=600)
     def get_exchange_rate():
@@ -83,6 +84,7 @@ with st.spinner('Fetching market data & Exchange rates... ⏳'):
     current_exchange_rate = exchange_rate_history.iloc[-1].item()
 
     final_tickers = []
+    ticker_map = {} 
     edited_df["RealTicker"] = edited_df["Ticker"] 
     edited_df["Currency"] = "USD"
 
@@ -100,37 +102,49 @@ with st.spinner('Fetching market data & Exchange rates... ⏳'):
             edited_df.at[index, "Currency"] = "USD"
         
         final_tickers.append(raw_ticker)
+        ticker_map[row["Ticker"]] = raw_ticker
         edited_df.at[index, "RealTicker"] = raw_ticker
 
     unique_tickers = list(set(final_tickers))
     
+    # 🔥 S&P 500 (^GSPC) 데이터도 같이 가져오기
     @st.cache_data(ttl=600) 
     def get_market_data(ticker_list):
+        download_list = ticker_list + ["^GSPC"] # 벤치마크 추가
         try:
-            data = yf.download(ticker_list, period="10y", progress=False)['Close']
+            data = yf.download(download_list, period="10y", progress=False)['Close']
             if isinstance(data, pd.Series):
-                data = data.to_frame(name=ticker_list[0])
+                data = data.to_frame(name=download_list[0])
             data.index = data.index.tz_localize(None)
             return data.ffill().fillna(0)
         except Exception as e:
             return pd.DataFrame()
 
-    raw_data = get_market_data(unique_tickers)
+    raw_data_all = get_market_data(unique_tickers)
     
-    if raw_data.empty:
+    if raw_data_all.empty:
         st.error("Failed to load data. Please check tickers.")
         st.stop()
 
+    # S&P 500 분리
+    sp500_data = raw_data_all["^GSPC"].copy()
+    raw_data = raw_data_all.drop(columns=["^GSPC"], errors='ignore') # 내 종목만 남김
+
+    # 인덱스 정렬
     common_index = raw_data.index.intersection(exchange_rate_history.index)
     raw_data = raw_data.loc[common_index]
     exchange_rate_history = exchange_rate_history.loc[common_index]
+    sp500_data = sp500_data.loc[raw_data.index]
 
     current_prices = raw_data.iloc[-1]
     last_updated = raw_data.index[-1].strftime('%Y-%m-%d %H:%M')
 
     earliest_input_date = pd.to_datetime(edited_df["Date"].min())
+    
+    # 시뮬레이션용 데이터 자르기
     sim_data = raw_data[raw_data.index >= earliest_input_date].copy()
     sim_ex_rate = exchange_rate_history[exchange_rate_history.index >= earliest_input_date]["KRW=X"]
+    sim_sp500 = sp500_data[sp500_data.index >= earliest_input_date].copy()
     
     portfolio_history = pd.Series(0.0, index=sim_data.index)
     invested_capital_history = pd.Series(0.0, index=sim_data.index)
@@ -215,12 +229,11 @@ with st.spinner('Fetching market data & Exchange rates... ⏳'):
 st.markdown(f"### 💰 Portfolio Status (Total in {target_currency})")
 st.caption(f"ℹ️ Applied Exchange Rate (USD/KRW): {current_exchange_rate:,.2f}")
 
-# 🔥 여기가 수정된 부분 (2단 그리드)
 c1, c2 = st.columns(2)
 c1.metric("Total Invested", f"{target_sym}{total_invested_converted:,.0f}")
 c2.metric("Current Value", f"{target_sym}{current_portfolio_value_converted:,.0f}")
 
-st.write("") # 여백
+st.write("") 
 
 c3, c4 = st.columns(2)
 c3.metric("Net Profit", f"{target_sym}{total_return_money:,.0f}", delta=f"{total_return_pct:.2f}%")
@@ -232,6 +245,37 @@ fig.add_trace(go.Scatter(x=portfolio_history.index, y=portfolio_history, mode='l
 fig.add_trace(go.Scatter(x=invested_capital_history.index, y=invested_capital_history, mode='lines', name='Invested Capital', line=dict(color='gray', dash='dash')))
 fig.update_layout(hovermode="x unified", template="plotly_white")
 st.plotly_chart(fig, use_container_width=True)
+
+# 🔥 [NEW] 1. 벤치마크 비교 (VS S&P 500)
+st.markdown("---")
+col_bench, col_corr = st.columns(2)
+
+with col_bench:
+    st.subheader("🆚 Benchmark (vs S&P 500)")
+    # 수익률 정규화 (시작일 기준 0%로 맞춤)
+    my_cum_ret = (portfolio_history / invested_capital_history - 1) * 100
+    sp500_cum_ret = (sim_sp500 / sim_sp500.iloc[0] - 1) * 100
+    
+    fig_bench = go.Figure()
+    fig_bench.add_trace(go.Scatter(x=my_cum_ret.index, y=my_cum_ret, mode='lines', name='My Portfolio', line=dict(color='#FF4B4B', width=2)))
+    fig_bench.add_trace(go.Scatter(x=sp500_cum_ret.index, y=sp500_cum_ret, mode='lines', name='S&P 500', line=dict(color='blue', dash='dot')))
+    fig_bench.update_layout(hovermode="x unified", template="plotly_white", yaxis_title="Cumulative Return (%)", height=400)
+    st.plotly_chart(fig_bench, use_container_width=True)
+
+# 🔥 [NEW] 2. 상관관계 히트맵 (Correlation Heatmap)
+with col_corr:
+    st.subheader("🔥 Correlation Heatmap")
+    # 상관관계 계산
+    corr_matrix = sim_data.pct_change().corr()
+    
+    fig_corr = px.imshow(corr_matrix, 
+                         text_auto=True, 
+                         aspect="auto", 
+                         color_continuous_scale="RdBu_r", # 빨강=높음, 파랑=낮음
+                         zmin=-1, zmax=1)
+    fig_corr.update_layout(height=400)
+    st.plotly_chart(fig_corr, use_container_width=True)
+
 
 st.subheader("🧾 Holdings Detail")
 st.dataframe(
@@ -245,6 +289,49 @@ st.dataframe(
     }).background_gradient(cmap='RdYlGn', subset=['Return (%)']),
     use_container_width=True
 )
+
+# 🔥 [NEW] 3. 기술적 분석 (RSI & Bollinger Bands)
+st.markdown("---")
+st.subheader("📊 Technical Analysis (RSI & Bollinger Bands)")
+st.info("Select an asset to see detailed charts.")
+
+selected_ticker_display = st.selectbox("Select Asset", df_details["Ticker"].unique())
+selected_real_ticker = ticker_map[selected_ticker_display] 
+
+if selected_real_ticker in raw_data.columns:
+    tech_data = raw_data[selected_real_ticker].copy().to_frame(name="Close")
+    tech_data = tech_data.iloc[-252:] 
+
+    # BB
+    tech_data['SMA_20'] = tech_data['Close'].rolling(window=20).mean()
+    tech_data['Std_20'] = tech_data['Close'].rolling(window=20).std()
+    tech_data['Upper_BB'] = tech_data['SMA_20'] + (tech_data['Std_20'] * 2)
+    tech_data['Lower_BB'] = tech_data['SMA_20'] - (tech_data['Std_20'] * 2)
+
+    # RSI
+    delta = tech_data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    tech_data['RSI'] = 100 - (100 / (1 + rs))
+
+    fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                             vertical_spacing=0.1, row_heights=[0.7, 0.3],
+                             subplot_titles=(f"{selected_ticker_display} Price & Bollinger Bands", "RSI (14)"))
+
+    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['Upper_BB'], line=dict(color='gray', width=1, dash='dot'), name='Upper Band'), row=1, col=1)
+    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['Lower_BB'], line=dict(color='gray', width=1, dash='dot'), name='Lower Band', fill='tonexty', fillcolor='rgba(200,200,200,0.1)'), row=1, col=1)
+    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['SMA_20'], line=dict(color='orange', width=1), name='20 MA'), row=1, col=1)
+    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['Close'], line=dict(color='blue', width=2), name='Price'), row=1, col=1)
+
+    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['RSI'], line=dict(color='purple', width=2), name='RSI'), row=2, col=1)
+    fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+    fig_tech.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+
+    fig_tech.update_layout(height=600, showlegend=True, hovermode="x unified")
+    st.plotly_chart(fig_tech, use_container_width=True)
+else:
+    st.warning("Not enough data to calculate indicators.")
 
 # ---------------------------------------------------------
 # 🔮 4. Gemini AI 진단
@@ -270,8 +357,9 @@ The user holds assets in both USD and KRW, but the summary is converted to {targ
 
 [Request]
 1. Analyze the portfolio performance considering Currency Risks (USD vs KRW exposure).
-2. Identify the main profit drivers.
-3. Suggest a rebalancing strategy or risk management tip for this mix.
+2. Compare the portfolio against general market trends (S&P 500).
+3. Evaluate diversification based on asset correlations (mention if assets are too correlated).
+4. Provide a strategy using technical indicators (RSI, Bollinger Bands) if applicable.
 
 Please write in **Korean** (한국어). Use Markdown.
 """
