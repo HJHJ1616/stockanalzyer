@@ -7,8 +7,9 @@ import numpy as np
 from datetime import datetime
 import google.generativeai as genai
 
+# 🔥 1. 제목 및 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (15m update)")
+st.title("🚀 Quant Dashboard (Global Currency Auto-Convert)")
 
 # ---------------------------------------------------------
 # 🔑 API 키 자동 로드
@@ -25,73 +26,87 @@ else:
     st.stop()
 
 # ---------------------------------------------------------
-# 1. 사이드바: 매매일지 입력 (시장 선택 기능 추가)
+# 1. 사이드바: 매매일지 입력
 # ---------------------------------------------------------
-st.sidebar.header("📝 내 주식 장부 작성")
+st.sidebar.header("📝 Portfolio Inputs")
 
-if st.sidebar.button("🔄 현재가 새로고침 (Click)"):
+if st.sidebar.button("🔄 Refresh Data (Click)"):
     st.cache_data.clear()
     st.rerun()
 
-currency_choice = st.sidebar.radio("🌍 기준 통화 (표시용)", ["달러 ($)", "원화 (₩)"])
-sym = "$" if currency_choice == "달러 ($)" else "₩"
+# 🔥 기준 통화 선택 (이게 '최종적으로 보여질' 통화입니다)
+target_currency = st.sidebar.radio("💱 Display Currency", ["KRW (₩)", "USD ($)"])
+target_sym = "₩" if target_currency == "KRW (₩)" else "$"
 
-st.sidebar.info("시장(미국/한국)을 선택하면 티커 뒤에 .KS/.KQ가 자동 입력됩니다.")
+st.sidebar.info("💡 입력은 '현지 통화' 그대로 하세요! (삼성=원, 애플=달러)")
 
-# 🔥 시장 구분 컬럼 추가
+# 기본 데이터 (시장별 현지 통화로 입력 예시)
 default_data = pd.DataFrame([
-    {"시장": "🇺🇸 미국", "티커": "SCHD", "매수일": datetime(2023, 1, 15), "매수 단가": 75.5, "수량": 100},
-    {"시장": "🇰🇷 코스피", "티커": "005930", "매수일": datetime(2023, 6, 20), "매수 단가": 70000.0, "수량": 10},
-    {"시장": "🇺🇸 코인", "티커": "BTC-USD", "매수일": datetime(2024, 1, 10), "매수 단가": 45000.0, "수량": 0.1},
+    {"Market": "🇺🇸 US", "Ticker": "SCHD", "Date": datetime(2023, 1, 15), "Price": 75.5, "Qty": 100}, # 75.5달러
+    {"Market": "🇰🇷 KOSPI", "Ticker": "005930", "Date": datetime(2023, 6, 20), "Price": 72000.0, "Qty": 10}, # 72000원
+    {"Market": "🇺🇸 Coin", "Ticker": "BTC-USD", "Date": datetime(2024, 1, 10), "Price": 45000.0, "Qty": 0.1}, # 45000달러
 ])
 
 edited_df = st.sidebar.data_editor(
     default_data,
     num_rows="dynamic",
     column_config={
-        "시장": st.column_config.SelectboxColumn(
-            "시장 선택",
-            options=["🇺🇸 미국", "🇰🇷 코스피", "🇰🇷 코스닥", "🇺🇸 코인"],
+        "Market": st.column_config.SelectboxColumn(
+            "Market",
+            options=["🇺🇸 US", "🇰🇷 KOSPI", "🇰🇷 KOSDAQ", "🇺🇸 Coin"],
             required=True
         ),
-        "티커": st.column_config.TextColumn("종목 티커 (예: 005930)", validate="^[A-Za-z0-9.-]+$"),
-        "매수일": st.column_config.DateColumn("매수 날짜", format="YYYY-MM-DD"),
-        "매수 단가": st.column_config.NumberColumn(f"매수 단가 ({sym})", min_value=0.01, format="%.2f"),
-        "수량": st.column_config.NumberColumn("보유 수량", min_value=0.0001, format="%.4f"),
+        "Ticker": st.column_config.TextColumn("Ticker", validate="^[A-Za-z0-9.-]+$"),
+        "Date": st.column_config.DateColumn("Buy Date", format="YYYY-MM-DD"),
+        "Price": st.column_config.NumberColumn("Buy Price (Local)", min_value=0.01, format="%.2f"),
+        "Qty": st.column_config.NumberColumn("Quantity", min_value=0.0001, format="%.4f"),
     },
     hide_index=True
 )
 
 if edited_df.empty:
-    st.warning("👈 사이드바에 최소 1개 이상의 종목을 입력해주세요!")
+    st.warning("👈 Please enter at least one ticker in the sidebar!")
     st.stop()
 
 # ---------------------------------------------------------
-# 2. 데이터 처리 및 계산 (자동 접미사 처리)
+# 2. 데이터 처리 및 환율 계산
 # ---------------------------------------------------------
-with st.spinner('최신 시장 데이터를 가져오는 중... ⏳'):
+with st.spinner('Fetching market data & Exchange rates... ⏳'):
     
-    # 🔥 [핵심] 사용자가 입력한 티커를 야후 파이낸스용으로 변환하는 로직
+    # 1. 환율 데이터 가져오기 (KRW=X)
+    @st.cache_data(ttl=600)
+    def get_exchange_rate():
+        # 10년치 환율 데이터를 가져옵니다.
+        ex_data = yf.download("KRW=X", period="10y", progress=False)['Close']
+        if isinstance(ex_data, pd.Series):
+            ex_data = ex_data.to_frame(name="KRW=X")
+        ex_data.index = ex_data.index.tz_localize(None)
+        return ex_data.ffill().fillna(1000) # 비어있으면 1000원(에러방지)
+
+    exchange_rate_history = get_exchange_rate()
+    current_exchange_rate = exchange_rate_history.iloc[-1].item() # 현재 환율 (예: 1380원)
+
+    # 2. 주식 데이터 티커 변환
     final_tickers = []
-    
-    # 원본 데이터프레임에 '실제티커' 컬럼 추가를 위해 미리 계산
-    edited_df["실제티커"] = edited_df["티커"] # 초기값
-    
+    edited_df["RealTicker"] = edited_df["Ticker"] 
+    edited_df["Currency"] = "USD" # 기본값
+
     for index, row in edited_df.iterrows():
-        raw_ticker = str(row["티커"]).strip().upper()
-        market = row["시장"]
+        raw_ticker = str(row["Ticker"]).strip().upper()
+        market = row["Market"]
         
-        # 이미 .KS나 .KQ를 붙여서 썼다면 그대로 두고, 안 붙였으면 붙여줌
-        if market == "🇰🇷 코스피":
-            if not raw_ticker.endswith(".KS"):
-                raw_ticker += ".KS"
-        elif market == "🇰🇷 코스닥":
-            if not raw_ticker.endswith(".KQ"):
-                raw_ticker += ".KQ"
+        if market == "🇰🇷 KOSPI":
+            if not raw_ticker.endswith(".KS"): raw_ticker += ".KS"
+            edited_df.at[index, "Currency"] = "KRW"
+        elif market == "🇰🇷 KOSDAQ":
+            if not raw_ticker.endswith(".KQ"): raw_ticker += ".KQ"
+            edited_df.at[index, "Currency"] = "KRW"
+        else:
+            # 미국주식, 코인은 USD
+            edited_df.at[index, "Currency"] = "USD"
         
         final_tickers.append(raw_ticker)
-        # 변환된 티커를 데이터프레임에 업데이트 (나중에 매칭 위해)
-        edited_df.at[index, "실제티커"] = raw_ticker
+        edited_df.at[index, "RealTicker"] = raw_ticker
 
     unique_tickers = list(set(final_tickers))
     
@@ -109,100 +124,147 @@ with st.spinner('최신 시장 데이터를 가져오는 중... ⏳'):
     raw_data = get_market_data(unique_tickers)
     
     if raw_data.empty:
-        st.error("데이터 로드 실패. 티커를 확인해주세요.")
+        st.error("Failed to load data. Please check tickers.")
         st.stop()
 
-    current_prices = raw_data.iloc[-1]
-    last_updated = raw_data.index[-1].strftime('%Y-%m-%d')
+    # 데이터 길이 맞추기 (환율 데이터와 주가 데이터의 인덱스 교집합)
+    common_index = raw_data.index.intersection(exchange_rate_history.index)
+    raw_data = raw_data.loc[common_index]
+    exchange_rate_history = exchange_rate_history.loc[common_index]
 
-    earliest_input_date = pd.to_datetime(edited_df["매수일"].min())
+    current_prices = raw_data.iloc[-1]
+    last_updated = raw_data.index[-1].strftime('%Y-%m-%d %H:%M')
+
+    # 차트용 데이터 초기화
+    earliest_input_date = pd.to_datetime(edited_df["Date"].min())
     sim_data = raw_data[raw_data.index >= earliest_input_date].copy()
+    sim_ex_rate = exchange_rate_history[exchange_rate_history.index >= earliest_input_date]["KRW=X"]
     
     portfolio_history = pd.Series(0.0, index=sim_data.index)
     invested_capital_history = pd.Series(0.0, index=sim_data.index)
 
-    total_invested = 0.0
-    current_portfolio_value = 0.0
+    total_invested_converted = 0.0
+    current_portfolio_value_converted = 0.0
     details = []
 
     for index, row in edited_df.iterrows():
-        real_ticker = row["실제티커"] # 변환된 티커 사용
-        display_ticker = row["티커"] # 보여줄 때는 입력한 그대로
+        real_ticker = row["RealTicker"]
+        display_ticker = row["Ticker"]
+        asset_currency = row["Currency"] # KRW or USD
         
-        buy_date = pd.to_datetime(row["매수일"])
-        price_at_buy = float(row["매수 단가"])
-        qty = float(row["수량"])
+        buy_date = pd.to_datetime(row["Date"])
+        price_at_buy_native = float(row["Price"]) # 현지 통화 매수 단가
+        qty = float(row["Qty"])
         
         if real_ticker not in sim_data.columns:
-            st.toast(f"⚠️ '{display_ticker}' 데이터 없음")
+            st.toast(f"⚠️ Data missing for '{display_ticker}'")
             continue
 
-        invest_amt = price_at_buy * qty
-        total_invested += invest_amt
+        # 1. 현지 통화 기준 가치 계산
+        invest_amt_native = price_at_buy_native * qty
+        current_price_native = current_prices[real_ticker]
+        current_val_native = current_price_native * qty
         
-        curr_price = current_prices[real_ticker]
-        curr_val = curr_price * qty
-        current_portfolio_value += curr_val
+        # 2. 환율 적용 (Display Currency로 변환)
+        # 환산 로직:
+        # - 자산(USD) -> 목표(KRW): Value * 환율
+        # - 자산(KRW) -> 목표(USD): Value / 환율
+        # - 자산 == 목표: Value 그대로
         
-        asset_val_series = sim_data[real_ticker] * qty
+        if target_currency == "KRW (₩)":
+            if asset_currency == "USD":
+                invest_amt_final = invest_amt_native * current_exchange_rate # 투자원금은 '현재' 가치로 단순 환산(약식) 혹은 매수일 환율 적용 가능하나 여기선 편의상 현재 환율/혹은 매수일 환율 선택. 
+                # (정확한 수익률 계산을 위해 매수일 기준 환율을 적용하면 좋지만, 데이터 복잡도를 위해 '투자 원금'도 현재 환율 기준으로 통일해서 보여주는 경우가 많음. 
+                # 여기서는 '매수 당시의 원화 투입금'을 추적하기 어려우므로, **현재 환율 기준으로 모든 가치를 평가**합니다.)
+                # -> 수정: 사용자 경험상 '내가 100달러 냈는데 지금 환율로 얼마지?'가 궁금하므로 현재 환율 적용
+                
+                # 시계열 데이터 변환 (역사적 환율 적용)
+                asset_val_series = (sim_data[real_ticker] * qty) * sim_ex_rate
+                invest_amt_final = invest_amt_native * current_exchange_rate # 단순 합산용
+                current_val_final = current_val_native * current_exchange_rate
+                
+            else: # KRW -> KRW
+                asset_val_series = sim_data[real_ticker] * qty
+                invest_amt_final = invest_amt_native
+                current_val_final = current_val_native
+
+        else: # Target is USD
+            if asset_currency == "KRW":
+                asset_val_series = (sim_data[real_ticker] * qty) / sim_ex_rate
+                invest_amt_final = invest_amt_native / current_exchange_rate
+                current_val_final = current_val_native / current_exchange_rate
+            else: # USD -> USD
+                asset_val_series = sim_data[real_ticker] * qty
+                invest_amt_final = invest_amt_native
+                current_val_final = current_val_native
+
+        # 누적
+        total_invested_converted += invest_amt_final
+        current_portfolio_value_converted += current_val_final
+        
+        # 차트 데이터 (매수일 이전 0 처리)
         asset_val_series.loc[asset_val_series.index < buy_date] = 0.0
         portfolio_history = portfolio_history.add(asset_val_series, fill_value=0)
         
+        # 원금 차트 (해당 종목이 추가된 날부터 원금 계단 상승)
         cap_series = pd.Series(0.0, index=sim_data.index)
-        cap_series.loc[cap_series.index >= buy_date] = invest_amt
+        cap_series.loc[cap_series.index >= buy_date] = invest_amt_final
         invested_capital_history = invested_capital_history.add(cap_series, fill_value=0)
 
-        roi = ((curr_price - price_at_buy) / price_at_buy) * 100 if price_at_buy > 0 else 0
+        # 개별 종목 수익률 (현지 통화 기준)
+        roi_native = ((current_price_native - price_at_buy_native) / price_at_buy_native) * 100
+
         details.append({
-            "종목": display_ticker, # 화면엔 '005930'으로 표시
-            "시장": row["시장"],
-            "수량": qty,
-            "매수 평균가": price_at_buy,
-            "현재가": curr_price,
-            "투자 원금": invest_amt,
-            "현재 평가금": curr_val,
-            "수익률(%)": roi
+            "Ticker": display_ticker,
+            "Market": row["Market"],
+            "Currency": asset_currency,
+            "Qty": qty,
+            "Avg Buy (Local)": price_at_buy_native,
+            "Current (Local)": current_price_native,
+            "Current Val (Converted)": current_val_final, # 환산된 가치
+            "Return (%)": roi_native # 수익률은 현지 통화 기준이 정확함
         })
 
-    if total_invested > 0:
-        total_return_money = current_portfolio_value - total_invested
-        total_return_pct = (total_return_money / total_invested) * 100
+    if total_invested_converted > 0:
+        total_return_money = current_portfolio_value_converted - total_invested_converted
+        total_return_pct = (total_return_money / total_invested_converted) * 100
     else:
         total_return_money = 0
         total_return_pct = 0
         
     df_details = pd.DataFrame(details)
     if not df_details.empty:
-        df_details["비중(%)"] = (df_details["현재 평가금"] / current_portfolio_value * 100).fillna(0)
+        df_details["Weight (%)"] = (df_details["Current Val (Converted)"] / current_portfolio_value_converted * 100).fillna(0)
 
 # ---------------------------------------------------------
 # 📊 3. 대시보드 출력
 # ---------------------------------------------------------
-st.markdown(f"### 💰 내 계좌 현황판 (기준일: {last_updated})")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("총 투자 원금", f"{sym}{total_invested:,.0f}")
-c2.metric("현재 총 자산", f"{sym}{current_portfolio_value:,.0f}")
-c3.metric("순수익금", f"{sym}{total_return_money:,.0f}", delta=f"{total_return_pct:.2f}%")
-c4.metric("분석 종목 수", f"{len(df_details)}개")
+st.markdown(f"### 💰 Portfolio Status (Total in {target_currency})")
+st.caption(f"ℹ️ Applied Exchange Rate (USD/KRW): {current_exchange_rate:,.2f}")
 
-st.subheader("📈 자산 성장 그래프")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total Invested", f"{target_sym}{total_invested_converted:,.0f}")
+c2.metric("Current Value", f"{target_sym}{current_portfolio_value_converted:,.0f}")
+c3.metric("Net Profit", f"{target_sym}{total_return_money:,.0f}", delta=f"{total_return_pct:.2f}%")
+c4.metric("Tickers", f"{len(df_details)}")
+
+st.subheader("📈 Asset Growth (Converted)")
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=portfolio_history.index, y=portfolio_history, mode='lines', name='평가 금액', line=dict(color='#FF4B4B', width=3)))
-fig.add_trace(go.Scatter(x=invested_capital_history.index, y=invested_capital_history, mode='lines', name='투자 원금', line=dict(color='gray', dash='dash')))
+fig.add_trace(go.Scatter(x=portfolio_history.index, y=portfolio_history, mode='lines', name='Total Value', line=dict(color='#FF4B4B', width=3)))
+fig.add_trace(go.Scatter(x=invested_capital_history.index, y=invested_capital_history, mode='lines', name='Invested Capital', line=dict(color='gray', dash='dash')))
 fig.update_layout(hovermode="x unified", template="plotly_white")
 st.plotly_chart(fig, use_container_width=True)
 
-st.subheader("🧾 보유 종목 상세")
+st.subheader("🧾 Holdings Detail")
 st.dataframe(
     df_details.style.format({
-        "수량": "{:,.4f}",
-        "매수 평균가": f"{sym}{{:,.2f}}", 
-        "현재가": f"{sym}{{:,.2f}}",
-        "투자 원금": f"{sym}{{:,.0f}}",
-        "현재 평가금": f"{sym}{{:,.0f}}",
-        "수익률(%)": "{:,.2f}%",
-        "비중(%)": "{:,.1f}%"
-    }).background_gradient(cmap='RdYlGn', subset=['수익률(%)']),
+        "Qty": "{:,.4f}",
+        "Avg Buy (Local)": "{:,.2f}", 
+        "Current (Local)": "{:,.2f}",
+        "Current Val (Converted)": f"{target_sym}{{:,.0f}}",
+        "Return (%)": "{:,.2f}%",
+        "Weight (%)": "{:,.1f}%"
+    }).background_gradient(cmap='RdYlGn', subset=['Return (%)']),
     use_container_width=True
 )
 
@@ -210,32 +272,34 @@ st.dataframe(
 # 🔮 4. Gemini AI 진단
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("🔮 Gemini AI 투자 애널리스트 진단")
+st.subheader("🔮 Gemini AI Analyst Report")
 
-ai_portfolio_summary = df_details[["종목", "비중(%)", "수익률(%)"]].to_string(index=False)
-chart_trend = "수익 중 (Good)" if total_return_pct > 0 else "손실 중 (Bad)"
+ai_portfolio_summary = df_details[["Ticker", "Currency", "Weight (%)", "Return (%)"]].to_string(index=False)
+chart_trend = "Upward (Profit)" if total_return_pct > 0 else "Downward (Loss)"
 
 prompt = f"""
-당신은 냉철한 퀀트 투자 애널리스트입니다. 사용자 계좌를 진단해주세요.
+You are a professional Quant Analyst. Analyze this user's GLOBAL portfolio.
+The user holds assets in both USD and KRW, but the summary is converted to {target_currency}.
 
-[계좌 요약]
-- 총 투자금: {sym}{total_invested:,.0f}
-- 현재 평가금: {sym}{current_portfolio_value:,.0f}
-- 수익률: {total_return_pct:.2f}% ({chart_trend})
+[Summary in {target_currency}]
+- Total Invested: {target_sym}{total_invested_converted:,.0f}
+- Current Value: {target_sym}{current_portfolio_value_converted:,.0f}
+- Total Return: {total_return_pct:.2f}% ({chart_trend})
+- Exchange Rate Used: {current_exchange_rate:,.2f} KRW/USD
 
-[보유 종목]
+[Holdings]
 {ai_portfolio_summary}
 
-[요청사항]
-1. 수익/손실의 주원인을 분석하세요.
-2. 현재 비중에서 리스크가 큰 부분을 지적하고, 리밸런싱 아이디어를 주세요.
-3. 향후 시장 상황에 따른 대응 전략을 간략히 조언하세요.
+[Request]
+1. Analyze the portfolio performance considering Currency Risks (USD vs KRW exposure).
+2. Identify the main profit drivers.
+3. Suggest a rebalancing strategy or risk management tip for this mix.
 
-마크다운으로 작성해주세요.
+Please write in **Korean** (한국어). Use Markdown.
 """
 
-if st.button("🤖 AI 진단 요청 (Click)"):
-    with st.spinner("AI가 분석 중입니다..."):
+if st.button("🤖 Analyze Portfolio (Click)"):
+    with st.spinner("AI Analyst is evaluating currency risks and assets..."):
         try:
             available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
             model_name = 'models/gemini-1.5-flash'
@@ -245,7 +309,7 @@ if st.button("🤖 AI 진단 요청 (Click)"):
             
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
-            st.success(f"✅ 진단 완료! (Model: {model_name})")
+            st.success(f"✅ Analysis Complete (Model: {model_name})")
             st.markdown(response.text)
         except Exception as e:
-            st.error(f"오류 발생: {e}")
+            st.error(f"Error: {e}")
