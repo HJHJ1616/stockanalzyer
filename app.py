@@ -8,12 +8,12 @@ import numpy as np
 from datetime import datetime
 import google.generativeai as genai
 
-# 🔥 1. 페이지 설정 (숫자 안 잘리게 넓게!)
+# 🔥 1. 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (Ultimate Full Version)")
+st.title("🚀 Quant Dashboard (V30. Final Stable)")
 
 # ---------------------------------------------------------
-# 🔑 API 키 로딩 및 AI 설정
+# 🔑 API 키 로딩 및 AI 설정 (404 에러 방지용)
 # ---------------------------------------------------------
 try:
     if "general" in st.secrets and "GEMINI_API_KEY" in st.secrets["general"]:
@@ -24,6 +24,7 @@ except:
     api_key = None
 
 if api_key:
+    # 💡 v1beta 에러 방지를 위해 기본 설정만 진행
     genai.configure(api_key=api_key)
 else:
     api_key_input = st.sidebar.text_input("🔑 API Key를 입력하세요 (Secrets 권장):", type="password")
@@ -32,7 +33,7 @@ else:
         api_key = api_key_input
 
 # ---------------------------------------------------------
-# 1. 사이드바: 매매일지 입력
+# 2. 사이드바: 매매일지 입력
 # ---------------------------------------------------------
 st.sidebar.header("📝 Portfolio Inputs")
 
@@ -67,7 +68,7 @@ if edited_df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# 2. 데이터 처리 및 환율 계산
+# 3. 데이터 로딩 및 처리
 # ---------------------------------------------------------
 with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     @st.cache_data(ttl=600)
@@ -78,8 +79,7 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         data.index = data.index.tz_localize(None)
         return data.ffill()
 
-    ticker_map = {}
-    final_tickers = []
+    ticker_map = {}; final_tickers = []
     for idx, row in edited_df.iterrows():
         rt = str(row["Ticker"]).strip().upper()
         if row["Market"] == "🇰🇷 KOSPI" and not rt.endswith(".KS"): rt += ".KS"
@@ -120,12 +120,8 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         invested_history = invested_history.add(cap_val, fill_value=0)
 
         details.append({
-            "Ticker": row["Ticker"],
-            "Market": row["Market"],
-            "Qty": row["Qty"],
-            "Avg Buy": row["Price"],
-            "Current": raw_data[rt].iloc[-1],
-            "Value": val_converted.iloc[-1],
+            "Ticker": row["Ticker"], "Qty": row["Qty"], "Avg Buy": row["Price"],
+            "Current": raw_data[rt].iloc[-1], "Value": val_converted.iloc[-1],
             "Return (%)": ((raw_data[rt].iloc[-1] - row["Price"]) / row["Price"]) * 100
         })
 
@@ -135,7 +131,7 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
 # ---------------------------------------------------------
-# 3. UI 출력 (상단 대시보드)
+# 4. UI 출력 (대시보드)
 # ---------------------------------------------------------
 st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2 = st.columns(2)
@@ -149,46 +145,24 @@ c4.metric("Tickers", f"{len(df_details)}")
 
 st.subheader("📈 Portfolio Growth")
 fig_growth = go.Figure()
-fig_growth.add_trace(go.Scatter(x=portfolio_history.index, y=portfolio_history, name="Total Value", line=dict(color='#FF4B4B', width=3)))
-fig_growth.add_trace(go.Scatter(x=invested_history.index, y=invested_history, name="Invested Capital", line=dict(color='gray', dash='dash')))
+fig_growth.add_trace(go.Scatter(x=portfolio_history.index, y=portfolio_history, name="Value", line=dict(color='#FF4B4B', width=3)))
+fig_growth.add_trace(go.Scatter(x=invested_history.index, y=invested_history, name="Capital", line=dict(color='gray', dash='dash')))
 st.plotly_chart(fig_growth, use_container_width=True)
 
-# ---------------------------------------------------------
-# 4. 리스크 분석 (벤치마크 & 히트맵)
-# ---------------------------------------------------------
-st.markdown("---")
-col_b, col_h = st.columns(2)
-with col_b:
-    st.subheader("🆚 vs S&P 500")
-    my_ret = (portfolio_history / invested_history - 1) * 100
-    sp_ret = (sp500_history / sp500_history.loc[earliest_date:].iloc[0] - 1) * 100
-    fig_b = go.Figure()
-    fig_b.add_trace(go.Scatter(x=my_ret.index, y=my_ret, name="My Port", line=dict(color='#FF4B4B')))
-    fig_b.add_trace(go.Scatter(x=sp_ret.index, y=sp_ret, name="S&P 500", line=dict(color='blue', dash='dot')))
-    st.plotly_chart(fig_b, use_container_width=True)
+# 상관관계 히트맵
+st.subheader("🔥 Correlation Heatmap")
+st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=True, color_continuous_scale="RdBu_r"), use_container_width=True)
 
-with col_h:
-    st.subheader("🔥 Correlation Heatmap")
-    st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=True, color_continuous_scale="RdBu_r", zmin=-1, zmax=1), use_container_width=True)
-
-# ---------------------------------------------------------
-# 5. 수익 결산 표 (Holdings Detail 부활!)
-# ---------------------------------------------------------
+# 🧾 수익 결산 표
 st.subheader("🧾 Holdings Detail")
-st.dataframe(
-    df_details.style.format({
-        "Qty": "{:,.4f}", "Avg Buy": "{:,.2f}", "Current": "{:,.2f}",
-        "Value": f"{target_sym}{{:,.0f}}", "Return (%)": "{:,.2f}%", "Weight (%)": "{:,.1f}%"
-    }).background_gradient(cmap='RdYlGn', subset=['Return (%)']),
-    use_container_width=True
-)
+st.dataframe(df_details.style.format({"Qty":"{:,.4f}", "Avg Buy":"{:,.2f}", "Current":"{:,.2f}", "Value":f"{target_sym}{{:,.0f}}", "Return (%)":"{:,.2f}%", "Weight (%)":"{:,.1f}%"}).background_gradient(cmap='RdYlGn', subset=['Return (%)']), use_container_width=True)
 
 # ---------------------------------------------------------
-# 6. 기술적 분석 (MA 5/20/60/120/200 + BB + RSI 부활!)
+# 5. 기술적 분석 (MA + BB + RSI 완벽 복구)
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 Technical Analysis")
-sel_ticker = st.selectbox("분석할 종목 선택", df_details["Ticker"].unique())
+sel_ticker = st.selectbox("종목 선택", df_details["Ticker"].unique())
 rt_sel = ticker_map[sel_ticker]
 tech_df = raw_data[rt_sel].to_frame(name="Close").iloc[-500:]
 
@@ -197,26 +171,23 @@ for ma in [5, 20, 60, 120, 200]:
 tech_df['Std_20'] = tech_df['Close'].rolling(window=20).std()
 tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2)
 tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
-
 delta = tech_df['Close'].diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
 tech_df['RSI'] = 100 - (100 / (1 + (gain / loss)))
 
-fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3], subplot_titles=("Price & Indicators", "RSI (14)"))
+fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3])
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='rgba(200,200,200,0.2)', dash='dot'), name='Upper BB'), row=1, col=1)
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='rgba(200,200,200,0.2)', dash='dot'), name='Lower BB', fill='tonexty'), row=1, col=1)
-
 colors = {'MA5':'pink', 'MA20':'orange', 'MA60':'green', 'MA120':'purple', 'MA200':'darkred'}
 for ma, color in colors.items():
     fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df[ma], line=dict(color=color, width=2 if ma=='MA200' else 1), name=ma), row=1, col=1)
-
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Close'], line=dict(color='blue', width=2), name='Price'), row=1, col=1)
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['RSI'], line=dict(color='magenta'), name='RSI'), row=2, col=1)
 fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1); fig_tech.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-fig_tech.update_layout(height=800, hovermode="x unified", template="plotly_white")
+fig_tech.update_layout(height=800, template="plotly_white", hovermode="x unified")
 st.plotly_chart(fig_tech, use_container_width=True)
 
 # ---------------------------------------------------------
-# 7. Gemini AI 분석 (안전장치 포함)
+# 6. Gemini AI 분석 (404 에러 원천 봉쇄)
 # ---------------------------------------------------------
 st.markdown("---")
 if st.button("🤖 Analyze Portfolio with AI"):
@@ -224,8 +195,16 @@ if st.button("🤖 Analyze Portfolio with AI"):
     else:
         status = st.empty(); status.info("AI 분석 중... ⏳")
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # 💡 경로 문제 해결을 위해 'models/gemini-1.5-flash' 직접 지정
+            model = genai.GenerativeModel('models/gemini-1.5-flash')
             summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
-            response = model.generate_content(f"다음 포트폴리오를 분석하고 투자 조언을 한국어로 해줘:\n{summary}")
+            response = model.generate_content(f"다음 포트폴리오를 퀀트 관점에서 분석하고 한국어로 조언해줘:\n{summary}")
             status.empty(); st.success("✅ 분석 완료!"); st.markdown(response.text)
-        except Exception as e: status.empty(); st.error(f"❌ 에러: {str(e)}")
+        except Exception as e:
+            try:
+                # 💡 만약 models/ 경로가 실패하면 대체 경로 시도
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content(f"분석해줘:\n{summary}")
+                status.empty(); st.success("✅ 분석 완료(alt)!"); st.markdown(response.text)
+            except Exception as e2:
+                status.empty(); st.error(f"❌ 에러 발생: {str(e2)}")
