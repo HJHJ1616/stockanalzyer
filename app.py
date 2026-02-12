@@ -9,7 +9,7 @@ import google.generativeai as genai
 
 # 🔥 1. 제목 및 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (Layout Fixed)")
+st.title("🚀 Quant Dashboard")
 
 # ---------------------------------------------------------
 # 🔑 API 키 자동 로드
