@@ -8,7 +8,7 @@ from datetime import datetime
 import google.generativeai as genai
 
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (ver. 13)")
+st.title("🚀 Quant Dashboard (ver.)")
 
 st.warning("⚠️ **[백테스트 로직 안내] 현금 방치형 (Cash Drag) 적용:** \n"
            "설정한 '매도일' 이후(또는 '매수일' 이전)의 자산은 추가 손익 없이 **수익률 0%의 '현금' 상태로 방치**되는 것으로 계산됩니다.")
@@ -17,10 +17,8 @@ st.warning("⚠️ **[백테스트 로직 안내] 현금 방치형 (Cash Drag) �
 # 🔑 API 키 자동 로드 (비밀 금고에서 꺼내오기)
 # ---------------------------------------------------------
 try:
-    # 1순위: 스트림릿 시크릿(secrets.toml)에서 찾기
     api_key = st.secrets["general"]["GEMINI_API_KEY"]
 except:
-    # 없으면 수동 입력창 띄우기 (에러 방지용)
     api_key = st.sidebar.text_input("🔑 API Key가 없습니다. 수동으로 입력하세요:", type="password")
 
 if api_key:
@@ -292,13 +290,33 @@ else:
     말투는 정중하지만 팩트에 기반하여 냉철하게 분석해주세요. 마크다운 형식을 사용하여 가독성 있게 작성하세요.
     """
 
-    # AI 분석 요청 버튼
+    # AI 분석 요청 버튼 (🔥 여기가 핵심: 모델 자동 찾기 기능 추가)
     if st.button("🤖 Gemini에게 심층 분석 요청하기 (Click)"):
-        with st.spinner("AI 애널리스트가 차트를 분석하고 보고서를 작성 중입니다... (약 5~10초 소요)"):
+        with st.spinner("AI가 사용 가능한 모델을 찾고 분석 중입니다... (약 5~10초 소요)"):
             try:
-                model = genai.GenerativeModel('gemini-pro')
+                # 1. 사용 가능한 모델 목록 조회
+                available_models = []
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        available_models.append(m.name)
+                
+                # 2. 우선순위에 따라 모델 선택 (Flash -> Pro -> 기본)
+                selected_model_name = 'models/gemini-1.5-flash' # 기본값
+                
+                for m in available_models:
+                    if 'flash' in m: # 1순위: 빠르고 저렴한 Flash
+                        selected_model_name = m
+                        break
+                    elif 'pro' in m: # 2순위: 성능 좋은 Pro
+                        selected_model_name = m
+                
+                # 3. 모델 연결 및 분석 시작
+                model = genai.GenerativeModel(selected_model_name)
                 response = model.generate_content(prompt)
+                
+                st.success(f"✅ 분석 완료! (사용 모델: {selected_model_name})")
                 st.markdown(response.text)
+                
             except Exception as e:
                 st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
 
