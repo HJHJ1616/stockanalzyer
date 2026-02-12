@@ -140,12 +140,12 @@ st.markdown("---")
 col_bench, col_heat = st.columns(2)
 
 with col_bench:
-    st.subheader("🆚 vs S&P 500 (Benchmark)")
+    st.subheader("My Portfolio vs S&P 500 (Benchmark)")
     my_ret = (portfolio_history / invested_history - 1) * 100
     sp_sliced = sp500_history.loc[earliest_date:]
     sp_ret = (sp_sliced / sp_sliced.iloc[0] - 1) * 100
     fig_b = go.Figure()
-    fig_b.add_trace(go.Scatter(x=my_ret[mask].index, y=my_ret[mask], name="내 포트폴리오", line=dict(color='#FF4B4B')))
+    fig_b.add_trace(go.Scatter(x=my_ret[mask].index, y=my_ret[mask], name="My Port", line=dict(color='#FF4B4B')))
     fig_b.add_trace(go.Scatter(x=sp_ret.index, y=sp_ret, name="S&P 500", line=dict(color='blue', dash='dot')))
     st.plotly_chart(fig_b, use_container_width=True)
 
