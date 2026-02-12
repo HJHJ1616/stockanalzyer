@@ -8,14 +8,13 @@ import numpy as np
 from datetime import datetime
 import google.generativeai as genai
 
-# 1. 페이지 설정
+# 🔥 1. 페이지 설정 (숫자 안 잘리게 넓게!)
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (V27. Stable Release)")
+st.title("🚀 Quant Dashboard (Ultimate Full Version)")
 
 # ---------------------------------------------------------
 # 🔑 API 키 로딩 및 AI 설정
 # ---------------------------------------------------------
-# 팁: Streamlit Cloud Secrets에 [general] GEMINI_API_KEY = "키" 형태로 저장하세요.
 try:
     if "general" in st.secrets and "GEMINI_API_KEY" in st.secrets["general"]:
         api_key = st.secrets["general"]["GEMINI_API_KEY"]
@@ -27,13 +26,13 @@ except:
 if api_key:
     genai.configure(api_key=api_key)
 else:
-    api_key_input = st.sidebar.text_input("🔑 API Key를 입력하세요:", type="password")
+    api_key_input = st.sidebar.text_input("🔑 API Key를 입력하세요 (Secrets 권장):", type="password")
     if api_key_input:
         genai.configure(api_key=api_key_input)
         api_key = api_key_input
 
 # ---------------------------------------------------------
-# 2. 사이드바: 매매일지 입력
+# 1. 사이드바: 매매일지 입력
 # ---------------------------------------------------------
 st.sidebar.header("📝 Portfolio Inputs")
 
@@ -68,13 +67,14 @@ if edited_df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# 3. 데이터 로딩 및 처리
+# 2. 데이터 처리 및 환율 계산
 # ---------------------------------------------------------
 with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     @st.cache_data(ttl=600)
     def fetch_data(ticker_list):
         download_list = ticker_list + ["^GSPC", "KRW=X"]
         data = yf.download(download_list, period="10y", progress=False)['Close']
+        if isinstance(data, pd.Series): data = data.to_frame(name=download_list[0])
         data.index = data.index.tz_localize(None)
         return data.ffill()
 
@@ -88,8 +88,6 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         final_tickers.append(rt)
 
     raw_data_all = fetch_data(list(set(final_tickers)))
-    
-    # 데이터 분리
     exchange_rate_history = raw_data_all["KRW=X"]
     sp500_history = raw_data_all["^GSPC"]
     raw_data = raw_data_all.drop(columns=["KRW=X", "^GSPC"], errors='ignore')
@@ -106,7 +104,6 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         buy_date = pd.to_datetime(row["Date"])
         is_usd = row["Market"] in ["🇺🇸 US", "🇺🇸 Coin"]
         
-        # 포트폴리오 가치 계산
         val_native = raw_data[rt] * float(row["Qty"])
         if target_currency == "KRW (₩)":
             val_converted = val_native * exchange_rate_history if is_usd else val_native
@@ -124,6 +121,10 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
 
         details.append({
             "Ticker": row["Ticker"],
+            "Market": row["Market"],
+            "Qty": row["Qty"],
+            "Avg Buy": row["Price"],
+            "Current": raw_data[rt].iloc[-1],
             "Value": val_converted.iloc[-1],
             "Return (%)": ((raw_data[rt].iloc[-1] - row["Price"]) / row["Price"]) * 100
         })
@@ -131,61 +132,100 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     total_invested = invested_history.iloc[-1]
     current_value = portfolio_history.iloc[-1]
     df_details = pd.DataFrame(details)
+    df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
 # ---------------------------------------------------------
-# 4. UI 출력 (메트릭 및 차트)
+# 3. UI 출력 (상단 대시보드)
 # ---------------------------------------------------------
-st.markdown(f"### 💰 Portfolio ({target_currency})")
+st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2 = st.columns(2)
 c1.metric("Total Invested", f"{target_sym}{total_invested:,.0f}")
 c2.metric("Current Value", f"{target_sym}{current_value:,.0f}")
 
-st.plotly_chart(px.line(portfolio_history, title="Portfolio Growth"), use_container_width=True)
+st.write("")
+c3, c4 = st.columns(2)
+c3.metric("Net Profit", f"{target_sym}{current_value-total_invested:,.0f}", delta=f"{(current_value/total_invested-1)*100:.2f}%")
+c4.metric("Tickers", f"{len(df_details)}")
 
-# 상관관계 히트맵
-st.subheader("🔥 Correlation Heatmap")
-st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=True, color_continuous_scale="RdBu_r"), use_container_width=True)
+st.subheader("📈 Portfolio Growth")
+fig_growth = go.Figure()
+fig_growth.add_trace(go.Scatter(x=portfolio_history.index, y=portfolio_history, name="Total Value", line=dict(color='#FF4B4B', width=3)))
+fig_growth.add_trace(go.Scatter(x=invested_history.index, y=invested_history, name="Invested Capital", line=dict(color='gray', dash='dash')))
+st.plotly_chart(fig_growth, use_container_width=True)
 
-# 기술적 분석 (MA 200 포함)
+# ---------------------------------------------------------
+# 4. 리스크 분석 (벤치마크 & 히트맵)
+# ---------------------------------------------------------
+st.markdown("---")
+col_b, col_h = st.columns(2)
+with col_b:
+    st.subheader("🆚 vs S&P 500")
+    my_ret = (portfolio_history / invested_history - 1) * 100
+    sp_ret = (sp500_history / sp500_history.loc[earliest_date:].iloc[0] - 1) * 100
+    fig_b = go.Figure()
+    fig_b.add_trace(go.Scatter(x=my_ret.index, y=my_ret, name="My Port", line=dict(color='#FF4B4B')))
+    fig_b.add_trace(go.Scatter(x=sp_ret.index, y=sp_ret, name="S&P 500", line=dict(color='blue', dash='dot')))
+    st.plotly_chart(fig_b, use_container_width=True)
+
+with col_h:
+    st.subheader("🔥 Correlation Heatmap")
+    st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=True, color_continuous_scale="RdBu_r", zmin=-1, zmax=1), use_container_width=True)
+
+# ---------------------------------------------------------
+# 5. 수익 결산 표 (Holdings Detail 부활!)
+# ---------------------------------------------------------
+st.subheader("🧾 Holdings Detail")
+st.dataframe(
+    df_details.style.format({
+        "Qty": "{:,.4f}", "Avg Buy": "{:,.2f}", "Current": "{:,.2f}",
+        "Value": f"{target_sym}{{:,.0f}}", "Return (%)": "{:,.2f}%", "Weight (%)": "{:,.1f}%"
+    }).background_gradient(cmap='RdYlGn', subset=['Return (%)']),
+    use_container_width=True
+)
+
+# ---------------------------------------------------------
+# 6. 기술적 분석 (MA 5/20/60/120/200 + BB + RSI 부활!)
+# ---------------------------------------------------------
+st.markdown("---")
 st.subheader("📊 Technical Analysis")
-sel_ticker = st.selectbox("종목 선택", df_details["Ticker"].unique())
+sel_ticker = st.selectbox("분석할 종목 선택", df_details["Ticker"].unique())
 rt_sel = ticker_map[sel_ticker]
 tech_df = raw_data[rt_sel].to_frame(name="Close").iloc[-500:]
 
 for ma in [5, 20, 60, 120, 200]:
     tech_df[f'MA{ma}'] = tech_df['Close'].rolling(window=ma).mean()
+tech_df['Std_20'] = tech_df['Close'].rolling(window=20).std()
+tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2)
+tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
 
-fig_tech = go.Figure()
-fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Close'], name="Price", line=dict(color='blue', width=2)))
-fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['MA200'], name="200 MA", line=dict(color='red', width=3)))
+delta = tech_df['Close'].diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+tech_df['RSI'] = 100 - (100 / (1 + (gain / loss)))
+
+fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3], subplot_titles=("Price & Indicators", "RSI (14)"))
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='rgba(200,200,200,0.2)', dash='dot'), name='Upper BB'), row=1, col=1)
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='rgba(200,200,200,0.2)', dash='dot'), name='Lower BB', fill='tonexty'), row=1, col=1)
+
+colors = {'MA5':'pink', 'MA20':'orange', 'MA60':'green', 'MA120':'purple', 'MA200':'darkred'}
+for ma, color in colors.items():
+    fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df[ma], line=dict(color=color, width=2 if ma=='MA200' else 1), name=ma), row=1, col=1)
+
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Close'], line=dict(color='blue', width=2), name='Price'), row=1, col=1)
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['RSI'], line=dict(color='magenta'), name='RSI'), row=2, col=1)
+fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1); fig_tech.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+fig_tech.update_layout(height=800, hovermode="x unified", template="plotly_white")
 st.plotly_chart(fig_tech, use_container_width=True)
 
 # ---------------------------------------------------------
-# 🔮 5. Gemini AI 분석 (무한 로딩 방지 강화)
+# 7. Gemini AI 분석 (안전장치 포함)
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("🔮 Gemini AI Analyst")
-
 if st.button("🤖 Analyze Portfolio with AI"):
-    if not api_key:
-        st.error("❌ API Key가 설정되지 않았습니다. Secrets를 확인해주세요.")
+    if not api_key: st.error("❌ API Key를 설정해주세요.")
     else:
-        status = st.empty()
-        status.info("AI 분석 중... 잠시만 기다려주세요. ⏳")
+        status = st.empty(); status.info("AI 분석 중... ⏳")
         try:
-            # 모델 탐색 및 설정
-            model_name = 'gemini-1.5-flash'
-            model = genai.GenerativeModel(model_name)
-            
-            summary = df_details.to_string(index=False)
-            prompt = f"다음 포트폴리오의 수익률과 종목 구성을 분석하고 투자 조언을 한국어로 해줘:\n{summary}"
-            
-            response = model.generate_content(prompt)
-            status.empty()
-            st.success(f"✅ 분석 완료 (Model: {model_name})")
-            st.markdown(response.text)
-            
-        except Exception as e:
-            status.empty()
-            st.error(f"❌ 에러 발생: {str(e)}")
-            st.info("💡 API 키가 차단되었거나, 모델명이 다를 수 있습니다.")
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
+            response = model.generate_content(f"다음 포트폴리오를 분석하고 투자 조언을 한국어로 해줘:\n{summary}")
+            status.empty(); st.success("✅ 분석 완료!"); st.markdown(response.text)
+        except Exception as e: status.empty(); st.error(f"❌ 에러: {str(e)}")
