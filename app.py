@@ -32,18 +32,47 @@ else:
         api_key = api_key_input
 
 def safe_generate_content(prompt):
-    # 무료 티어에서 가장 안정적인 1.5-flash 사용
-    target_model = "models/gemini-1.5-flash"
     try:
+        # 1. 현재 API 키로 사용 가능한 모든 모델 리스트를 실시간으로 긁어옵니다.
+        # 여기서 404가 날 수 있는 모든 모델명을 원천 봉쇄합니다.
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        # 2. 우리가 선호하는 모델 우선순위 (가장 최신/안정적인 순서)
+        # models/ 가 붙은 이름과 안 붙은 이름을 모두 대비합니다.
+        priority_list = [
+            "models/gemini-1.5-flash", "gemini-1.5-flash",
+            "models/gemini-1.5-flash-latest", "gemini-1.5-flash-latest",
+            "models/gemini-2.0-flash", "gemini-2.0-flash",
+            "models/gemini-pro", "gemini-pro"
+        ]
+        
+        # 3. 리스트 중에 실제 서버에 존재하는 모델 하나를 선택합니다.
+        target_model = None
+        for p_model in priority_list:
+            if p_model in available_models:
+                target_model = p_model
+                break
+        
+        # 만약 우선순위에 없으면, 리스트에 있는 것 중 아무거나 첫 번째 거라도 씁니다.
+        if not target_model and available_models:
+            target_model = available_models[0]
+            
+        if not target_model:
+            raise Exception("사용 가능한 Gemini 모델이 계정에 없습니다. API 키를 확인해주세요.")
+
+        # 4. 드디어 결정된 모델로 분석 진행!
         model = genai.GenerativeModel(target_model)
-        # 답변 길이를 제한하여 토큰을 아끼고 속도 향상
         response = model.generate_content(prompt, generation_config={"max_output_tokens": 400})
         return response.text, target_model
-    except Exception as e:
-        if "429" in str(e):
-            raise Exception("🚨 현재 사용량(Quota)이 소진되었습니다. 잠시 후 시도하거나 내일 다시 이용해주세요.")
-        raise e
 
+    except Exception as e:
+        # 429 에러(한도초과)와 404 에러를 구분해서 알려줍니다.
+        if "429" in str(e):
+            raise Exception("🚨 오늘치 무료 분석을 다 썼어요! 내일 다시 시도해주세요.")
+        raise Exception(f"AI 엔진 오류: {str(e)}")
 # ---------------------------------------------------------
 # 2. 사이드바 및 포트폴리오 데이터 입력 (소수점 완벽 지원)
 # ---------------------------------------------------------
