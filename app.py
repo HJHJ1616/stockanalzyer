@@ -10,7 +10,7 @@ import google.generativeai as genai
 
 # 🔥 1. 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (V36. Master)")
+st.title("🚀 Quant Dashboard (V37. Error Free)")
 
 # ---------------------------------------------------------
 # 🔑 API 키 로딩 및 AI 설정
@@ -117,7 +117,7 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
 # ---------------------------------------------------------
-# 4. 상단 메트릭 & 포트폴리오 차트
+# 4. UI 출력 (메트릭 & 성장 차트)
 # ---------------------------------------------------------
 st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2, c3 = st.columns(3)
@@ -140,7 +140,7 @@ st.plotly_chart(fig_growth, use_container_width=True)
 st.markdown("---")
 col_bench, col_heat = st.columns(2)
 with col_bench:
-    st.subheader("🆚 vs S&P 500 (Benchmark)")
+    st.subheader("🆚 vs S&P 500")
     my_ret = (portfolio_history / invested_history - 1) * 100
     sp_sliced = sp500_history.loc[earliest_date:]
     sp_ret = (sp_sliced / sp_sliced.iloc[0] - 1) * 100
@@ -151,13 +151,13 @@ with col_bench:
 
 with col_heat:
     st.subheader("🔥 Correlation Heatmap")
-    st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=True, color_continuous_scale="RdBu_r", zmin=-1, zmax=1), use_container_width=True)
+    st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=True, color_continuous_scale="RdBu_r"), use_container_width=True)
 
 st.subheader("🧾 Holdings Detail")
 st.dataframe(df_details.style.format({"Qty":"{:,.4f}", "Avg Buy":"{:,.2f}", "Current":"{:,.2f}", "Value":f"{target_sym}{{:,.0f}}", "Return (%)":"{:,.2f}%", "Weight (%)":"{:,.1f}%"}).background_gradient(cmap='RdYlGn', subset=['Return (%)']), use_container_width=True)
 
 # ---------------------------------------------------------
-# 📊 6. 기술적 분석 (MA, BB, RSI) + 개별 종목 AI 분석
+# 📊 6. 기술적 분석 (MA, BB, RSI) + 개별 분석
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 Detailed Technical Analysis")
@@ -166,10 +166,50 @@ rt_sel = ticker_map[sel_ticker]; tech_df = raw_data[rt_sel].to_frame(name="Close
 
 for ma in [5, 20, 60, 120, 200]: tech_df[f'MA{ma}'] = tech_df['Close'].rolling(window=ma).mean()
 tech_df['Std_20'] = tech_df['Close'].rolling(window=20).std()
-tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2); tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
+tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2)
+tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
 delta = tech_df['Close'].diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
 tech_df['RSI'] = 100 - (100 / (1 + (gain / loss)))
 
 fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3])
-fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='rgba(200,200,200,0.2)', dash='dot'), name='Upper BB'), row=1, col=1)
-fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='rgba(200,200
+# 볼린저 밴드 수정 (에러 발생 구간 수정 완료)
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='lightgray', dash='dot'), name='Upper BB'), row=1, col=1)
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='lightgray', dash='dot'), name='Lower BB', fill='tonexty'), row=1, col=1)
+
+colors = {'MA5':'pink', 'MA20':'orange', 'MA60':'green', 'MA120':'purple', 'MA200':'darkred'}
+for ma, color in colors.items():
+    fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df[ma], line=dict(color=color), name=ma), row=1, col=1)
+
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Close'], line=dict(color='blue', width=2), name='Price'), row=1, col=1)
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['RSI'], line=dict(color='magenta'), name='RSI'), row=2, col=1)
+fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1); fig_tech.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+fig_tech.update_layout(height=800, template="plotly_white", hovermode="x unified")
+st.plotly_chart(fig_tech, use_container_width=True)
+
+if st.button(f"🔍 AI {sel_ticker} 지표 분석"):
+    if not api_key: st.error("❌ API Key를 설정해주세요.")
+    else:
+        status = st.empty(); status.info("차트 분석 중...")
+        try:
+            last_price = tech_df['Close'].iloc[-1]; last_rsi = tech_df['RSI'].iloc[-1]
+            last_ma20 = tech_df['MA20'].iloc[-1]; last_ma200 = tech_df['MA200'].iloc[-1]
+            prompt = f"{sel_ticker} 분석: 현재가 {last_price:.2f}, RSI {last_rsi:.2f}, 20일선 {last_ma20:.2f}, 200일선 {last_ma200:.2f}. 기술적 지표를 보고 매수/매도 조언을 한국어로 해줘."
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt)
+            status.empty(); st.success("분석 완료!"); st.info(response.text)
+        except Exception as e: status.empty(); st.error(f"AI 에러: {str(e)}")
+
+# ---------------------------------------------------------
+# 🤖 7. 전체 포트폴리오 진단
+# ---------------------------------------------------------
+st.markdown("---")
+if st.button("🤖 전체 포트폴리오 진단"):
+    if not api_key: st.error("❌ API Key를 설정해주세요.")
+    else:
+        status = st.empty(); status.info("포트폴리오 진단 중...")
+        try:
+            summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(f"내 포트폴리오 분석해줘:\n{summary}")
+            status.empty(); st.success("진단 완료!"); st.markdown(response.text)
+        except Exception as e: status.empty(); st.error(f"AI 에러: {str(e)}")
