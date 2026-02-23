@@ -31,17 +31,68 @@ else:
         genai.configure(api_key=api_key_input)
         api_key = api_key_input
 
+# 🛠️ [지능형 모델 자동 매칭 함수]
 def safe_generate_content(prompt):
-    model_names = ["gemini-1.5-flash", "models/gemini-1.5-flash"]
-    for name in model_names:
+    try:
+        # 1. 현재 이 API Key로 사용 가능한 모델 리스트를 실시간으로 가져옵니다.
+        available_models = [m.name for m in genai.list_models() 
+                           if 'generateContent' in m.supported_generation_methods]
+        
+        # 2. 효진 님에게 가장 좋은 모델 순서대로 우선순위 정하기
+        # 최신 2.0 -> 안정적인 1.5 순으로 리스트를 만듭니다.
+        priority_list = [
+            "models/gemini-2.0-flash", 
+            "models/gemini-1.5-flash", 
+            "models/gemini-1.5-flash-latest",
+            "models/gemini-pro"
+        ]
+        
+        # 3. 리스트에 있는 모델 중 실제 사용 가능한 첫 번째 모델을 선택
+        target_model = None
+        for p_model in priority_list:
+            if p_model in available_models:
+                target_model = p_model
+                break
+        
+        # 만약 우선순위에 없으면 리스트 중 아무거나 첫 번째 거라도 씁니다.
+        if not target_model and available_models:
+            target_model = available_models[0]
+            
+        if not target_model:
+            raise Exception("사용 가능한 Gemini 모델이 계정에 없습니다.")
+
+        # 4. 선택된 모델로 분석 진행
+        model = genai.GenerativeModel(target_model)
+        response = model.generate_content(prompt)
+        return response.text, target_model # 모델 이름도 같이 반환해서 확인용으로 씀
+
+    except Exception as e:
+        raise Exception(f"AI 엔진 오류: {str(e)}")
+
+# ---------------------------------------------------------
+# 🔍 AI 분석 버튼 (자동 모델 매칭 적용)
+# ---------------------------------------------------------
+if st.button(f"🔍 AI {sel_ticker} 분석"):
+    if not api_key: st.error("❌ API Key를 설정해주세요.")
+    else:
+        status = st.empty()
+        status.info("최적의 AI 모델을 찾는 중...")
         try:
-            model = genai.GenerativeModel(name)
-            response = model.generate_content(prompt)
-            return response.text
+            l_p, l_r = tech_df['Close'].iloc[-1], tech_df['RSI'].iloc[-1]
+            prompt = f"{sel_ticker} 현재가 {l_p:.2f}, RSI {l_r:.2f}. 투자 전략 요약해줘."
+            
+            # 여기서 자동 매칭 발생!
+            result_text, used_model = safe_generate_content(prompt)
+            
+            status.empty()
+            st.success(f"✅ 분석 완료 (사용 모델: {used_model})")
+            st.info(result_text)
         except Exception as e:
-            if "404" in str(e): continue
-            raise e
-    raise Exception("AI 모델 연결 실패")
+            status.empty()
+            if "429" in str(e):
+                st.error("🚨 사용량 초과! 30초만 쉬었다가 다시 눌러주세요.")
+            else:
+                st.error(f"⚠️ {str(e)}")
 
 # ---------------------------------------------------------
 # 2. 사이드바 입력 (소수점 지원)
