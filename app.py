@@ -8,12 +8,12 @@ import numpy as np
 from datetime import datetime
 import google.generativeai as genai
 
-# 🔥 1. 페이지 설정
+# 1. 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (V40. AI Master)")
+st.title("🚀 Quant Dashboard (V45. Final Stability)")
 
 # ---------------------------------------------------------
-# 🔑 API 키 로딩 및 [모델 자동 탐색] 설정
+# 🔑 API 및 모델 설정
 # ---------------------------------------------------------
 try:
     if "general" in st.secrets and "GEMINI_API_KEY" in st.secrets["general"]:
@@ -23,18 +23,6 @@ try:
 except:
     api_key = None
 
-# 사용 가능한 모델을 전역적으로 찾는 함수
-def get_best_model():
-    try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # 2.0-flash가 있으면 우선 사용, 없으면 1.5-flash, 그마저도 없으면 첫 번째 모델
-        target = "models/gemini-2.0-flash"
-        if target not in models:
-            target = next((m for m in models if "1.5-flash" in m), models[0])
-        return target
-    except:
-        return "models/gemini-1.5-flash" # 폴백용
-
 if api_key:
     genai.configure(api_key=api_key)
 else:
@@ -43,8 +31,25 @@ else:
         genai.configure(api_key=api_key_input)
         api_key = api_key_input
 
+# 모델 호출 통합 함수 (404 에러 방지용)
+def safe_generate_content(prompt):
+    # 무료 티어에서 가장 안정적인 1.5-flash 우선 사용
+    model_names = ["gemini-1.5-flash", "models/gemini-1.5-flash"]
+    last_error = None
+    
+    for name in model_names:
+        try:
+            model = genai.GenerativeModel(name)
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            last_error = e
+            if "404" in str(e): continue # 다음 이름으로 시도
+            else: break # 429 등 다른 에러는 즉시 중단
+    raise last_error
+
 # ---------------------------------------------------------
-# 2. 사이드바 및 데이터 로딩 (기존과 동일)
+# 2. 사이드바 입력 및 데이터 처리
 # ---------------------------------------------------------
 st.sidebar.header("📝 Portfolio Inputs")
 if st.sidebar.button("🔄 Refresh Data"):
@@ -57,7 +62,7 @@ target_sym = "₩" if target_currency == "KRW (₩)" else "$"
 default_data = pd.DataFrame([
     {"Market": "🇺🇸 US", "Ticker": "SCHD", "Date": datetime(2023, 1, 15), "Price": 75.5, "Qty": 100},
     {"Market": "🇰🇷 KOSPI", "Ticker": "005930", "Date": datetime(2023, 6, 20), "Price": 72000.0, "Qty": 10},
-    {"Market": "🇺🇸 Coin", "Ticker": "BTC-USD", "Date": datetime(2024, 1, 10), "Price": 45000.0, "Qty": 0.1},
+    {"Market": "🇺🇸 US", "Ticker": "OKLO", "Date": datetime(2024, 1, 10), "Price": 10.0, "Qty": 50},
 ])
 
 edited_df = st.sidebar.data_editor(
@@ -77,7 +82,7 @@ if edited_df.empty:
     st.warning("👈 데이터를 입력해주세요.")
     st.stop()
 
-# (중략: 데이터 로딩 및 차트 생성 로직 - V37과 동일)
+# 데이터 로딩
 with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     @st.cache_data(ttl=600)
     def fetch_data(ticker_list):
@@ -123,10 +128,13 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         invested_history = invested_history.add(cap_val, fill_value=0)
         details.append({"Ticker": row["Ticker"], "Qty": row["Qty"], "Avg Buy": row["Price"], "Current": raw_data[rt].iloc[-1], "Value": val_converted.iloc[-1], "Return (%)": ((raw_data[rt].iloc[-1] - row["Price"]) / row["Price"]) * 100})
 
-    total_invested = invested_history.iloc[-1]; current_value = portfolio_history.iloc[-1]; df_details = pd.DataFrame(details)
+    total_invest invested_history.iloc[-1]; current_value = portfolio_history.iloc[-1]
+    df_details = pd.DataFrame(details)
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
-# (중략: 메트릭, 성장차트, 벤치마크, 히트맵, 상세표 출력 로직)
+# ---------------------------------------------------------
+# 3. UI 렌더링 (메트릭/성장/벤치마크/히트맵)
+# ---------------------------------------------------------
 st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2, c3 = st.columns(3)
 c1.metric("Total Invested", f"{target_sym}{total_invested:,.0f}")
@@ -135,20 +143,16 @@ c3.metric("Profit/Loss", f"{target_sym}{current_value-total_invested:,.0f}", del
 
 st.subheader("📈 Portfolio Growth")
 mask = portfolio_history > 0
-f_history = portfolio_history[mask]; f_invested = invested_history[mask]
 fig_growth = go.Figure()
-fig_growth.add_trace(go.Scatter(x=f_history.index, y=f_history, name="자산 가치", line=dict(color='#FF4B4B', width=3)))
-fig_growth.add_trace(go.Scatter(x=f_invested.index, y=f_invested, name="투자 원금", line=dict(color='gray', dash='dash')))
-fig_growth.update_layout(hovermode="x unified", template="plotly_white")
+fig_growth.add_trace(go.Scatter(x=portfolio_history[mask].index, y=portfolio_history[mask], name="자산 가치", line=dict(color='#FF4B4B', width=3)))
+fig_growth.add_trace(go.Scatter(x=invested_history[mask].index, y=invested_history[mask], name="투자 원금", line=dict(color='gray', dash='dash')))
 st.plotly_chart(fig_growth, use_container_width=True)
 
-st.markdown("---")
 col_bench, col_heat = st.columns(2)
 with col_bench:
     st.subheader("🆚 vs S&P 500")
     my_ret = (portfolio_history / invested_history - 1) * 100
-    sp_sliced = sp500_history.loc[earliest_date:]
-    sp_ret = (sp_sliced / sp_sliced.iloc[0] - 1) * 100
+    sp_sliced = sp500_history.loc[earliest_date:]; sp_ret = (sp_sliced / sp_sliced.iloc[0] - 1) * 100
     fig_b = go.Figure()
     fig_b.add_trace(go.Scatter(x=my_ret[mask].index, y=my_ret[mask], name="내 포트폴리오", line=dict(color='#FF4B4B')))
     fig_b.add_trace(go.Scatter(x=sp_ret.index, y=sp_ret, name="S&P 500", line=dict(color='blue', dash='dot')))
@@ -162,7 +166,7 @@ st.subheader("🧾 Holdings Detail")
 st.dataframe(df_details.style.format({"Qty":"{:,.4f}", "Avg Buy":"{:,.2f}", "Current":"{:,.2f}", "Value":f"{target_sym}{{:,.0f}}", "Return (%)":"{:,.2f}%", "Weight (%)":"{:,.1f}%"}).background_gradient(cmap='RdYlGn', subset=['Return (%)']), use_container_width=True)
 
 # ---------------------------------------------------------
-# 📊 6. 기술적 분석 + [개별 종목 AI 분석 - 모델 수정]
+# 📊 4. 기술적 분석 및 AI 종목 분석
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 Detailed Technical Analysis")
@@ -175,7 +179,6 @@ tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2); tech_df['Lower'] =
 delta = tech_df['Close'].diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
 tech_df['RSI'] = 100 - (100 / (1 + (gain / loss)))
 
-# 차트 코드 생략 (V37과 동일)
 fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3])
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='lightgray', dash='dot'), name='Upper BB'), row=1, col=1)
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='lightgray', dash='dot'), name='Lower BB', fill='tonexty'), row=1, col=1)
@@ -187,22 +190,22 @@ fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1); fig_
 fig_tech.update_layout(height=800, template="plotly_white", hovermode="x unified")
 st.plotly_chart(fig_tech, use_container_width=True)
 
-if st.button(f"🔍 AI {sel_ticker} 지표 분석"):
+if st.button(f"🔍 AI {sel_ticker} 분석 (RSI/이평선)"):
     if not api_key: st.error("❌ API Key를 설정해주세요.")
     else:
-        status = st.empty(); status.info("차트 분석 중...")
+        status = st.empty(); status.info(f"{sel_ticker} 분석 중...")
         try:
-            current_model_name = get_best_model() # 모델 자동 탐색
-            model = genai.GenerativeModel(current_model_name)
-            last_price = tech_df['Close'].iloc[-1]; last_rsi = tech_df['RSI'].iloc[-1]
-            last_ma20 = tech_df['MA20'].iloc[-1]; last_ma200 = tech_df['MA200'].iloc[-1]
-            prompt = f"{sel_ticker} 분석: 현재가 {last_price:.2f}, RSI {last_rsi:.2f}, 20일선 {last_ma20:.2f}, 200일선 {last_ma200:.2f}. 기술적 지표를 보고 매수/매도 조언을 한국어로 해줘."
-            response = model.generate_content(prompt)
-            status.empty(); st.success(f"분석 완료! (Model: {current_model_name})"); st.info(response.text)
-        except Exception as e: status.empty(); st.error(f"AI 에러: {str(e)}")
+            l_p, l_r = tech_df['Close'].iloc[-1], tech_df['RSI'].iloc[-1]
+            prompt = f"{sel_ticker} 분석: 현재가 {l_p:.2f}, RSI {l_r:.2f}. 기술적 분석 및 대응책 3줄 요약해줘."
+            result = safe_generate_content(prompt)
+            status.empty(); st.success("분석 완료!"); st.info(result)
+        except Exception as e:
+            status.empty()
+            if "429" in str(e): st.error("🚨 쿼터 초과! 30초 뒤에 시도하세요.")
+            else: st.error(f"AI 에러: {str(e)}")
 
 # ---------------------------------------------------------
-# 🤖 7. [전체 포트폴리오 진단 - 모델 수정]
+# 🤖 5. 전체 포트폴리오 진단
 # ---------------------------------------------------------
 st.markdown("---")
 if st.button("🤖 전체 포트폴리오 진단"):
@@ -210,9 +213,11 @@ if st.button("🤖 전체 포트폴리오 진단"):
     else:
         status = st.empty(); status.info("포트폴리오 진단 중...")
         try:
-            current_model_name = get_best_model() # 모델 자동 탐색
-            model = genai.GenerativeModel(current_model_name)
             summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
-            response = model.generate_content(f"내 포트폴리오 분석해줘:\n{summary}")
-            status.empty(); st.success(f"진단 완료! (Model: {current_model_name})"); st.markdown(response.text)
-        except Exception as e: status.empty(); st.error(f"AI 에러: {str(e)}")
+            prompt = f"다음 포트폴리오의 비중과 수익률을 보고 위험도와 개선안을 분석해줘:\n{summary}"
+            result = safe_generate_content(prompt)
+            status.empty(); st.success("진단 완료!"); st.markdown(result)
+        except Exception as e:
+            status.empty()
+            if "429" in str(e): st.error("🚨 쿼터 초과! 30초 뒤에 시도하세요.")
+            else: st.error(f"AI 에러: {str(e)}")
