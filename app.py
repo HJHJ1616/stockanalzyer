@@ -33,17 +33,32 @@ else:
 
 def safe_generate_content(prompt):
     try:
-        # 실시간으로 사용 가능한 모델 리스트 조회
+        # 1. 사용 가능한 모델 목록 조회
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        priority_list = ["models/gemini-2.0-flash", "models/gemini-1.5-flash", "models/gemini-pro"]
         
-        target_model = next((p for p in priority_list if p in available_models), None)
-        if not target_model and available_models: target_model = available_models[0]
-        if not target_model: raise Exception("사용 가능한 모델이 없습니다.")
+        # 2. 우선순위 리스트
+        priority_list = ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "models/gemini-pro"]
+        
+        last_error = None
+        for target_model in priority_list:
+            if target_model in available_models:
+                try:
+                    model = genai.GenerativeModel(target_model)
+                    response = model.generate_content(prompt)
+                    return response.text, target_model
+                except Exception as e:
+                    # 429(쿼터 초과) 에러가 나면 다음 순위 모델로 넘어감
+                    if "429" in str(e):
+                        last_error = e
+                        continue 
+                    else:
+                        raise e
+                        
+        # 모든 모델이 실패했을 때
+        if last_error and "429" in str(last_error):
+            raise Exception("현재 모든 무료 모델의 일일 쿼터가 소진되었습니다. 내일 다시 시도하거나 다른 구글 계정으로 새 프로젝트를 만들어보세요.")
+        raise Exception("사용 가능한 모델을 찾을 수 없습니다.")
 
-        model = genai.GenerativeModel(target_model)
-        response = model.generate_content(prompt)
-        return response.text, target_model
     except Exception as e:
         raise Exception(f"AI 엔진 오류: {str(e)}")
 
