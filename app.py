@@ -10,10 +10,10 @@ import google.generativeai as genai
 
 # 1. 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (V48. Full Recovery)")
+st.title("🚀 Quant Dashboard (V49. Master)")
 
 # ---------------------------------------------------------
-# 🔑 API 및 모델 설정 (404 에러 방지 로직)
+# 🔑 API 및 모델 설정
 # ---------------------------------------------------------
 try:
     if "general" in st.secrets and "GEMINI_API_KEY" in st.secrets["general"]:
@@ -31,9 +31,7 @@ else:
         genai.configure(api_key=api_key_input)
         api_key = api_key_input
 
-# 🛠️ AI 응답 생성 함수 (모델 경로 404 완벽 방어)
 def safe_generate_content(prompt):
-    # 최신 SDK에서는 이름만 쓰거나 models/를 붙이는 방식 중 하나가 작동함
     model_names = ["gemini-1.5-flash", "models/gemini-1.5-flash"]
     for name in model_names:
         try:
@@ -43,10 +41,10 @@ def safe_generate_content(prompt):
         except Exception as e:
             if "404" in str(e): continue
             raise e
-    raise Exception("적절한 AI 모델을 찾을 수 없습니다.")
+    raise Exception("AI 모델 연결 실패")
 
 # ---------------------------------------------------------
-# 2. 사이드바 및 포트폴리오 입력 (소수점 입력 가능)
+# 2. 사이드바 입력 (소수점 지원)
 # ---------------------------------------------------------
 st.sidebar.header("📝 Portfolio Inputs")
 if st.sidebar.button("🔄 Refresh Data"):
@@ -68,20 +66,20 @@ edited_df = st.sidebar.data_editor(
     column_config={
         "Market": st.column_config.SelectboxColumn("Market", options=["🇺🇸 US", "🇰🇷 KOSPI", "🇰🇷 KOSDAQ", "🇺🇸 Coin"], required=True),
         "Ticker": st.column_config.TextColumn("Ticker"),
-        "Date": st.column_config.DateColumn("Buy Date", format="YYYY-MM-DD"),
+        "Date": st.column_config.DateColumn("Buy Date"),
         "Price": st.column_config.NumberColumn("Price (Local)", format="%.2f"),
-        "Qty": st.column_config.NumberColumn("Qty", step=0.000001, format="%.6f"), # 🛠️ 소수점 6자리 허용
+        "Qty": st.column_config.NumberColumn("Qty", step=0.000001, format="%.6f"),
     },
     hide_index=True
 )
 
-# ---------------------------------------------------------
-# 3. 데이터 로딩 및 계산
-# ---------------------------------------------------------
 if edited_df.empty:
     st.warning("👈 데이터를 입력해주세요.")
     st.stop()
 
+# ---------------------------------------------------------
+# 3. 데이터 로딩 및 계산
+# ---------------------------------------------------------
 with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     @st.cache_data(ttl=600)
     def fetch_data(ticker_list):
@@ -122,7 +120,6 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         else:
             val_converted = val_native if is_usd else val_native / exchange_rate_history
             invest_converted = (float(row["Price"]) * qty) if is_usd else (float(row["Price"]) * qty) / current_ex_rate
-        
         val_converted.loc[val_converted.index < buy_date] = 0.0
         portfolio_history = portfolio_history.add(val_converted, fill_value=0)
         cap_val = pd.Series(0.0, index=raw_data.index); cap_val.loc[cap_val.index >= buy_date] = invest_converted
@@ -135,7 +132,7 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
 # ---------------------------------------------------------
-# 4. 상단 메트릭 및 자산 성장 차트 (복구)
+# 4. 차트 출력 영역
 # ---------------------------------------------------------
 st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2, c3 = st.columns(3)
@@ -148,90 +145,77 @@ mask = portfolio_history > 0
 fig_growth = go.Figure()
 fig_growth.add_trace(go.Scatter(x=portfolio_history[mask].index, y=portfolio_history[mask], name="자산 가치", line=dict(color='#FF4B4B', width=3)))
 fig_growth.add_trace(go.Scatter(x=invested_history[mask].index, y=invested_history[mask], name="투자 원금", line=dict(color='gray', dash='dash')))
-fig_growth.update_layout(template="plotly_white", hovermode="x unified")
 st.plotly_chart(fig_growth, use_container_width=True)
 
-# ---------------------------------------------------------
-# 5. S&P 500 비교 & 상관관계 히트맵 (복구)
-# ---------------------------------------------------------
 col_bench, col_heat = st.columns(2)
 with col_bench:
     st.subheader("🆚 vs S&P 500")
     my_ret = (portfolio_history / invested_history - 1) * 100
-    sp_sliced = sp500_history.loc[earliest_date:]; sp_ret = (sp_sliced / sp_sliced.iloc[0] - 1) * 100
+    sp_ret = (sp500_history.loc[earliest_date:] / sp500_history.loc[earliest_date:].iloc[0] - 1) * 100
     fig_b = go.Figure()
     fig_b.add_trace(go.Scatter(x=my_ret[mask].index, y=my_ret[mask], name="내 포트폴리오", line=dict(color='#FF4B4B')))
     fig_b.add_trace(go.Scatter(x=sp_ret.index, y=sp_ret, name="S&P 500", line=dict(color='blue', dash='dot')))
-    fig_b.update_layout(template="plotly_white", yaxis_title="누적 수익률 (%)")
     st.plotly_chart(fig_b, use_container_width=True)
 
 with col_heat:
     st.subheader("🔥 Correlation Heatmap")
-    corr_matrix = raw_data.pct_change().corr()
-    fig_heat = px.imshow(corr_matrix, text_auto=".2f", color_continuous_scale="RdBu_r")
-    st.plotly_chart(fig_heat, use_container_width=True)
+    st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=".2f", color_continuous_scale="RdBu_r"), use_container_width=True)
 
 st.subheader("🧾 Holdings Detail")
 st.dataframe(df_details.style.format({"Qty":"{:,.6f}", "Avg Buy":"{:,.2f}", "Current":"{:,.2f}", "Value":f"{target_sym}{{:,.0f}}", "Return (%)":"{:,.2f}%", "Weight (%)":"{:,.1f}%"}).background_gradient(cmap='RdYlGn', subset=['Return (%)']), use_container_width=True)
 
 # ---------------------------------------------------------
-# 6. 기술적 분석 (볼린저 밴드 + 이평선) (복구)
+# 5. 기술적 분석 (에러 수정됨!)
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 Detailed Technical Analysis")
 sel_ticker = st.selectbox("분석 종목 선택", df_details["Ticker"].unique())
 rt_sel = ticker_map[sel_ticker]; tech_df = raw_data[rt_sel].to_frame(name="Close").iloc[-500:]
 
-# 지표 계산 로직
 for ma in [5, 20, 60, 120, 200]: tech_df[f'MA{ma}'] = tech_df['Close'].rolling(window=ma).mean()
 tech_df['Std_20'] = tech_df['Close'].rolling(window=20).std()
-tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2); tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
+tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2)
+tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
 delta = tech_df['Close'].diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
 tech_df['RSI'] = 100 - (100 / (1 + (gain / loss)))
 
-# 서브플롯 차트 생성
 fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3])
-# 볼린저 밴드
-fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='rgba(200,200,200,0)', showlegend=False), name='Upper BB'), row=1, col=1)
-fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='rgba(200,200,200,0)', showlegend=False), fill='tonexty', fillcolor='rgba(200,200,200,0.2)', name='BB Range'), row=1, col=1)
-# 이동평균선
+
+# ✅ 에러 수정 포인트: showlegend 위치를 line 밖으로 뺐습니다.
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='rgba(200,200,200,0)'), name='Upper BB', showlegend=False), row=1, col=1)
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='rgba(200,200,200,0)'), fill='tonexty', fillcolor='rgba(200,200,200,0.2)', name='BB Range', showlegend=False), row=1, col=1)
+
 colors = {'MA5':'pink', 'MA20':'orange', 'MA60':'green', 'MA120':'purple', 'MA200':'darkred'}
 for ma, color in colors.items():
     fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df[ma], line=dict(color=color, width=1), name=ma), row=1, col=1)
-# 종가
+
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Close'], line=dict(color='blue', width=2), name='Price'), row=1, col=1)
-# RSI
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['RSI'], line=dict(color='magenta'), name='RSI'), row=2, col=1)
 fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
 fig_tech.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-
 fig_tech.update_layout(height=800, template="plotly_white", hovermode="x unified")
 st.plotly_chart(fig_tech, use_container_width=True)
 
 # ---------------------------------------------------------
-# 7. AI 분석 및 포트폴리오 진단
+# 6. AI 분석
 # ---------------------------------------------------------
 col_ai1, col_ai2 = st.columns(2)
 with col_ai1:
     if st.button(f"🔍 AI {sel_ticker} 기술적 분석"):
         if not api_key: st.error("❌ API Key를 설정해주세요.")
         else:
-            with st.spinner("AI 분석 중..."):
+            with st.spinner("분석 중..."):
                 try:
-                    l_p, l_r = tech_df['Close'].iloc[-1], tech_df['RSI'].iloc[-1]
-                    prompt = f"{sel_ticker} 현재가 {l_p:.2f}, RSI {l_r:.2f}. 볼린저 밴드와 이평선을 고려해 투자 전략을 3줄로 요약해줘."
-                    result = safe_generate_content(prompt)
-                    st.info(result)
+                    prompt = f"{sel_ticker} 현재가 {tech_df['Close'].iloc[-1]:.2f}, RSI {tech_df['RSI'].iloc[-1]:.2f}. 대응 전략 요약해줘."
+                    st.info(safe_generate_content(prompt))
                 except Exception as e: st.error(f"AI 에러: {str(e)}")
 
 with col_ai2:
     if st.button("🤖 전체 포트폴리오 진단"):
         if not api_key: st.error("❌ API Key를 설정해주세요.")
         else:
-            with st.spinner("포트폴리오 진단 중..."):
+            with st.spinner("진단 중..."):
                 try:
                     summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
-                    prompt = f"다음 포트폴리오 비중과 수익률을 분석해서 리밸런싱 조언을 한국어로 해줘:\n{summary}"
-                    result = safe_generate_content(prompt)
-                    st.success("진단 완료!"); st.markdown(result)
+                    st.success("진단 완료!"); st.markdown(safe_generate_content(f"포트폴리오 분석해줘:\n{summary}"))
                 except Exception as e: st.error(f"AI 에러: {str(e)}")
