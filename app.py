@@ -10,10 +10,10 @@ import google.generativeai as genai
 
 # 1. 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (V52. Master)")
+st.title("🚀 Quant Dashboard (V57. Master)")
 
 # ---------------------------------------------------------
-# 🔑 API 및 지능형 AI 엔진 설정
+# 🔑 API 및 지능형 AI 엔진 (경량화 로직)
 # ---------------------------------------------------------
 try:
     if "general" in st.secrets and "GEMINI_API_KEY" in st.secrets["general"]:
@@ -32,38 +32,20 @@ else:
         api_key = api_key_input
 
 def safe_generate_content(prompt):
+    # 무료 티어에서 가장 안정적인 1.5-flash 사용
+    target_model = "models/gemini-1.5-flash"
     try:
-        # 1. 사용 가능한 모델 목록 조회
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # 2. 우선순위 리스트
-        priority_list = ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "models/gemini-pro"]
-        
-        last_error = None
-        for target_model in priority_list:
-            if target_model in available_models:
-                try:
-                    model = genai.GenerativeModel(target_model)
-                    response = model.generate_content(prompt)
-                    return response.text, target_model
-                except Exception as e:
-                    # 429(쿼터 초과) 에러가 나면 다음 순위 모델로 넘어감
-                    if "429" in str(e):
-                        last_error = e
-                        continue 
-                    else:
-                        raise e
-                        
-        # 모든 모델이 실패했을 때
-        if last_error and "429" in str(last_error):
-            raise Exception("현재 모든 무료 모델의 일일 쿼터가 소진되었습니다. 내일 다시 시도하거나 다른 구글 계정으로 새 프로젝트를 만들어보세요.")
-        raise Exception("사용 가능한 모델을 찾을 수 없습니다.")
-
+        model = genai.GenerativeModel(target_model)
+        # 답변 길이를 제한하여 토큰을 아끼고 속도 향상
+        response = model.generate_content(prompt, generation_config={"max_output_tokens": 400})
+        return response.text, target_model
     except Exception as e:
-        raise Exception(f"AI 엔진 오류: {str(e)}")
+        if "429" in str(e):
+            raise Exception("🚨 현재 사용량(Quota)이 소진되었습니다. 잠시 후 시도하거나 내일 다시 이용해주세요.")
+        raise e
 
 # ---------------------------------------------------------
-# 2. 사이드바 및 포트폴리오 데이터 (소수점 지원)
+# 2. 사이드바 및 포트폴리오 데이터 입력 (소수점 완벽 지원)
 # ---------------------------------------------------------
 st.sidebar.header("📝 Portfolio Inputs")
 if st.sidebar.button("🔄 Refresh Data"):
@@ -73,10 +55,11 @@ if st.sidebar.button("🔄 Refresh Data"):
 target_currency = st.sidebar.radio("💱 Display Currency", ["KRW (₩)", "USD ($)"])
 target_sym = "₩" if target_currency == "KRW (₩)" else "$"
 
+# 기본 예시 데이터 (비트코인 소수점 포함)
 default_data = pd.DataFrame([
     {"Market": "🇺🇸 US", "Ticker": "SCHD", "Date": datetime(2023, 1, 15), "Price": 75.5, "Qty": 100.0},
     {"Market": "🇰🇷 KOSPI", "Ticker": "005930", "Date": datetime(2023, 6, 20), "Price": 72000.0, "Qty": 10.0},
-    {"Market": "🇺🇸 Coin", "Ticker": "BTC-USD", "Date": datetime(2024, 1, 10), "Price": 45000.0, "Qty": 0.015},
+    {"Market": "🇺🇸 Coin", "Ticker": "BTC-USD", "Date": datetime(2024, 1, 10), "Price": 45000.0, "Qty": 0.012345},
 ])
 
 edited_df = st.sidebar.data_editor(
@@ -86,19 +69,18 @@ edited_df = st.sidebar.data_editor(
         "Ticker": st.column_config.TextColumn("Ticker"),
         "Date": st.column_config.DateColumn("Buy Date"),
         "Price": st.column_config.NumberColumn("Price (Local)", format="%.2f"),
-        "Qty": st.column_config.NumberColumn("Qty", step=0.000001, format="%.6f"),
-    },
-    hide_index=True
+        "Qty": st.column_config.NumberColumn("Qty", step=0.000001, format="%.6f"), # 🛠️ 소수점 6자리 허용
+    }, hide_index=True
 )
 
 if edited_df.empty:
-    st.warning("👈 데이터를 입력해주세요.")
+    st.warning("👈 좌측 사이드바에 데이터를 입력해주세요.")
     st.stop()
 
 # ---------------------------------------------------------
-# 3. 데이터 로딩 및 계산
+# 3. 데이터 처리 및 계산
 # ---------------------------------------------------------
-with st.spinner('데이터를 실시간으로 가져오는 중...'):
+with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     @st.cache_data(ttl=600)
     def fetch_data(ticker_list):
         download_list = ticker_list + ["^GSPC", "KRW=X"]
@@ -138,6 +120,7 @@ with st.spinner('데이터를 실시간으로 가져오는 중...'):
         else:
             val_converted = val_native if is_usd else val_native / exchange_rate_history
             invest_converted = (float(row["Price"]) * qty) if is_usd else (float(row["Price"]) * qty) / current_ex_rate
+        
         val_converted.loc[val_converted.index < buy_date] = 0.0
         portfolio_history = portfolio_history.add(val_converted, fill_value=0)
         cap_val = pd.Series(0.0, index=raw_data.index); cap_val.loc[cap_val.index >= buy_date] = invest_converted
@@ -150,7 +133,7 @@ with st.spinner('데이터를 실시간으로 가져오는 중...'):
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
 # ---------------------------------------------------------
-# 4. 포트폴리오 성과 섹션
+# 4. 상단 성과 지표 및 성장 차트
 # ---------------------------------------------------------
 st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2, c3 = st.columns(3)
@@ -165,8 +148,8 @@ fig_growth.add_trace(go.Scatter(x=portfolio_history[mask].index, y=portfolio_his
 fig_growth.add_trace(go.Scatter(x=invested_history[mask].index, y=invested_history[mask], name="Capital", line=dict(color='gray', dash='dash')))
 st.plotly_chart(fig_growth, use_container_width=True)
 
-col1, col2 = st.columns(2)
-with col1:
+col_bench, col_heat = st.columns(2)
+with col_bench:
     st.subheader("🆚 vs S&P 500")
     my_ret = (portfolio_history / invested_history - 1) * 100
     sp_ret = (sp500_history.loc[earliest_date:] / sp500_history.loc[earliest_date:].iloc[0] - 1) * 100
@@ -174,7 +157,8 @@ with col1:
     fig_b.add_trace(go.Scatter(x=my_ret[mask].index, y=my_ret[mask], name="My Port", line=dict(color='#FF4B4B')))
     fig_b.add_trace(go.Scatter(x=sp_ret.index, y=sp_ret, name="S&P 500", line=dict(color='blue', dash='dot')))
     st.plotly_chart(fig_b, use_container_width=True)
-with col2:
+
+with col_heat:
     st.subheader("🔥 Correlation Heatmap")
     st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=".2f", color_continuous_scale="RdBu_r"), use_container_width=True)
 
@@ -182,21 +166,19 @@ st.subheader("🧾 Holdings Detail")
 st.dataframe(df_details.style.format({"Qty":"{:,.6f}", "Avg Buy":"{:,.2f}", "Current":"{:,.2f}", "Value":f"{target_sym}{{:,.0f}}", "Return (%)":"{:,.2f}%", "Weight (%)":"{:,.1f}%"}).background_gradient(cmap='RdYlGn', subset=['Return (%)']), use_container_width=True)
 
 # ---------------------------------------------------------
-# 5. 기술적 분석 & AI (여기에 sel_ticker 정의가 완벽히 들어감)
+# 5. 기술적 분석 (볼린저 밴드 + RSI)
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 Detailed Technical Analysis")
 sel_ticker = st.selectbox("분석 종목 선택", df_details["Ticker"].unique())
-
-# sel_ticker가 정의된 직후에 데이터를 가공합니다.
 rt_sel = ticker_map[sel_ticker]; tech_df = raw_data[rt_sel].to_frame(name="Close").iloc[-500:]
+
 for ma in [5, 20, 60, 120, 200]: tech_df[f'MA{ma}'] = tech_df['Close'].rolling(window=ma).mean()
 tech_df['Std_20'] = tech_df['Close'].rolling(window=20).std()
 tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2); tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
 delta = tech_df['Close'].diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
 tech_df['RSI'] = 100 - (100 / (1 + (gain / loss)))
 
-# 차트 그리기
 fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3])
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='rgba(200,200,200,0)'), showlegend=False), row=1, col=1)
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='rgba(200,200,200,0)'), fill='tonexty', fillcolor='rgba(200,200,200,0.2)', showlegend=False), row=1, col=1)
@@ -208,27 +190,43 @@ fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1); fig_
 fig_tech.update_layout(height=800, template="plotly_white", hovermode="x unified")
 st.plotly_chart(fig_tech, use_container_width=True)
 
-# AI 버튼들
+# ---------------------------------------------------------
+# 6. 🍏 AI 60일 추세 다이어트 분석
+# ---------------------------------------------------------
 c_ai1, c_ai2 = st.columns(2)
 with c_ai1:
-    if st.button(f"🔍 AI {sel_ticker} 분석"):
+    if st.button(f"🔍 AI {sel_ticker} 60일 추세 분석"):
         if not api_key: st.error("❌ API Key를 설정해주세요.")
         else:
-            with st.spinner("최적 모델 매칭 및 분석 중..."):
+            with st.spinner("최근 두 달간의 흐름을 요약 중..."):
                 try:
-                    p = f"{sel_ticker} 현재가 {tech_df['Close'].iloc[-1]:.2f}, RSI {tech_df['RSI'].iloc[-1]:.2f}. 전략 3줄 요약."
-                    txt, model_name = safe_generate_content(p)
-                    st.success(f"✅ 완료 (Model: {model_name})")
+                    recent_60 = tech_df.tail(60)
+                    cur_p = recent_60['Close'].iloc[-1]; start_p = recent_60['Close'].iloc[0]
+                    chg = ((cur_p - start_p) / start_p) * 100
+                    
+                    # 3일 간격 추출로 토큰 다이어트
+                    summary = f"""
+                    종목: {sel_ticker} | 현재가: {cur_p:.2f} (60일전 대비 {chg:+.2f}%)
+                    RSI: {recent_60['RSI'].iloc[-1]:.1f}
+                    이평선: MA20({recent_60['MA20'].iloc[-1]:.2f}), MA60({recent_60['MA60'].iloc[-1]:.2f})
+                    주가 추이(3일간격): {recent_60['Close'].iloc[::3].tolist()}
+                    """
+                    prompt = f"{summary}\n위 60일 데이터를 기반으로 중기 추세와 대응 전략을 한국어로 3문장 요약해줘."
+                    
+                    txt, model_name = safe_generate_content(prompt)
+                    st.success(f"✅ 분석 완료 (Model: {model_name})")
                     st.info(txt)
                 except Exception as e: st.error(str(e))
+
 with c_ai2:
-    if st.button("🤖 전체 포트폴리오 진단"):
+    if st.button("🤖 포트폴리오 요약 진단"):
         if not api_key: st.error("❌ API Key를 설정해주세요.")
         else:
-            with st.spinner("포트폴리오 진단 중..."):
+            with st.spinner("비중 분석 중..."):
                 try:
-                    summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
-                    txt, model_name = safe_generate_content(f"포트폴리오 진단해줘:\n{summary}")
-                    st.success(f"✅ 완료 (Model: {model_name})")
+                    port_summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
+                    prompt = f"내 포트폴리오 요약:\n{port_summary}\n\n리밸런싱 조언을 딱 한 문단으로 한국어로 해줘."
+                    txt, model_name = safe_generate_content(prompt)
+                    st.success(f"✅ 진단 완료 (Model: {model_name})")
                     st.markdown(txt)
                 except Exception as e: st.error(str(e))
