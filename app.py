@@ -10,7 +10,7 @@ import google.generativeai as genai
 
 # 1. 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (V45. Final Stability)")
+st.title("🚀 Quant Dashboard (V46. Syntax Fixed)")
 
 # ---------------------------------------------------------
 # 🔑 API 및 모델 설정
@@ -31,12 +31,10 @@ else:
         genai.configure(api_key=api_key_input)
         api_key = api_key_input
 
-# 모델 호출 통합 함수 (404 에러 방지용)
+# 모델 호출 통합 함수 (404/429 에러 방지용)
 def safe_generate_content(prompt):
-    # 무료 티어에서 가장 안정적인 1.5-flash 우선 사용
     model_names = ["gemini-1.5-flash", "models/gemini-1.5-flash"]
     last_error = None
-    
     for name in model_names:
         try:
             model = genai.GenerativeModel(name)
@@ -44,8 +42,8 @@ def safe_generate_content(prompt):
             return response.text
         except Exception as e:
             last_error = e
-            if "404" in str(e): continue # 다음 이름으로 시도
-            else: break # 429 등 다른 에러는 즉시 중단
+            if "404" in str(e): continue
+            else: break
     raise last_error
 
 # ---------------------------------------------------------
@@ -128,12 +126,14 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         invested_history = invested_history.add(cap_val, fill_value=0)
         details.append({"Ticker": row["Ticker"], "Qty": row["Qty"], "Avg Buy": row["Price"], "Current": raw_data[rt].iloc[-1], "Value": val_converted.iloc[-1], "Return (%)": ((raw_data[rt].iloc[-1] - row["Price"]) / row["Price"]) * 100})
 
-    total_invested invested_history.iloc[-1]; current_value = portfolio_history.iloc[-1]
+    # 🛠️ 수정된 부분: total_invested 변수명 수정
+    total_invested = invested_history.iloc[-1]
+    current_value = portfolio_history.iloc[-1]
     df_details = pd.DataFrame(details)
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
 # ---------------------------------------------------------
-# 3. UI 렌더링 (메트릭/성장/벤치마크/히트맵)
+# 3. UI 렌더링
 # ---------------------------------------------------------
 st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2, c3 = st.columns(3)
@@ -190,13 +190,13 @@ fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1); fig_
 fig_tech.update_layout(height=800, template="plotly_white", hovermode="x unified")
 st.plotly_chart(fig_tech, use_container_width=True)
 
-if st.button(f"🔍 AI {sel_ticker} 분석 (RSI/이평선)"):
+if st.button(f"🔍 AI {sel_ticker} 분석"):
     if not api_key: st.error("❌ API Key를 설정해주세요.")
     else:
         status = st.empty(); status.info(f"{sel_ticker} 분석 중...")
         try:
             l_p, l_r = tech_df['Close'].iloc[-1], tech_df['RSI'].iloc[-1]
-            prompt = f"{sel_ticker} 분석: 현재가 {l_p:.2f}, RSI {l_r:.2f}. 기술적 분석 및 대응책 3줄 요약해줘."
+            prompt = f"{sel_ticker} 현재가 {l_p:.2f}, RSI {l_r:.2f}. 기술적 분석 및 대응책 3줄 요약해줘."
             result = safe_generate_content(prompt)
             status.empty(); st.success("분석 완료!"); st.info(result)
         except Exception as e:
@@ -214,7 +214,7 @@ if st.button("🤖 전체 포트폴리오 진단"):
         status = st.empty(); status.info("포트폴리오 진단 중...")
         try:
             summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
-            prompt = f"다음 포트폴리오의 비중과 수익률을 보고 위험도와 개선안을 분석해줘:\n{summary}"
+            prompt = f"다음 포트폴리오 분석해줘:\n{summary}"
             result = safe_generate_content(prompt)
             status.empty(); st.success("진단 완료!"); st.markdown(result)
         except Exception as e:
