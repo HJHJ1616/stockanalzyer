@@ -10,10 +10,10 @@ import google.generativeai as genai
 
 # 1. 페이지 설정
 st.set_page_config(layout="wide", page_title="Quant Dashboard")
-st.title("🚀 Quant Dashboard (V49. Master)")
+st.title("🚀 Quant Dashboard (V52. Master)")
 
 # ---------------------------------------------------------
-# 🔑 API 및 모델 설정
+# 🔑 API 및 지능형 AI 엔진 설정
 # ---------------------------------------------------------
 try:
     if "general" in st.secrets and "GEMINI_API_KEY" in st.secrets["general"]:
@@ -31,71 +31,24 @@ else:
         genai.configure(api_key=api_key_input)
         api_key = api_key_input
 
-# 🛠️ [지능형 모델 자동 매칭 함수]
 def safe_generate_content(prompt):
     try:
-        # 1. 현재 이 API Key로 사용 가능한 모델 리스트를 실시간으로 가져옵니다.
-        available_models = [m.name for m in genai.list_models() 
-                           if 'generateContent' in m.supported_generation_methods]
+        # 실시간으로 사용 가능한 모델 리스트 조회
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        priority_list = ["models/gemini-2.0-flash", "models/gemini-1.5-flash", "models/gemini-pro"]
         
-        # 2. 효진 님에게 가장 좋은 모델 순서대로 우선순위 정하기
-        # 최신 2.0 -> 안정적인 1.5 순으로 리스트를 만듭니다.
-        priority_list = [
-            "models/gemini-2.0-flash", 
-            "models/gemini-1.5-flash", 
-            "models/gemini-1.5-flash-latest",
-            "models/gemini-pro"
-        ]
-        
-        # 3. 리스트에 있는 모델 중 실제 사용 가능한 첫 번째 모델을 선택
-        target_model = None
-        for p_model in priority_list:
-            if p_model in available_models:
-                target_model = p_model
-                break
-        
-        # 만약 우선순위에 없으면 리스트 중 아무거나 첫 번째 거라도 씁니다.
-        if not target_model and available_models:
-            target_model = available_models[0]
-            
-        if not target_model:
-            raise Exception("사용 가능한 Gemini 모델이 계정에 없습니다.")
+        target_model = next((p for p in priority_list if p in available_models), None)
+        if not target_model and available_models: target_model = available_models[0]
+        if not target_model: raise Exception("사용 가능한 모델이 없습니다.")
 
-        # 4. 선택된 모델로 분석 진행
         model = genai.GenerativeModel(target_model)
         response = model.generate_content(prompt)
-        return response.text, target_model # 모델 이름도 같이 반환해서 확인용으로 씀
-
+        return response.text, target_model
     except Exception as e:
         raise Exception(f"AI 엔진 오류: {str(e)}")
 
 # ---------------------------------------------------------
-# 🔍 AI 분석 버튼 (자동 모델 매칭 적용)
-# ---------------------------------------------------------
-if st.button(f"🔍 AI {sel_ticker} 분석"):
-    if not api_key: st.error("❌ API Key를 설정해주세요.")
-    else:
-        status = st.empty()
-        status.info("최적의 AI 모델을 찾는 중...")
-        try:
-            l_p, l_r = tech_df['Close'].iloc[-1], tech_df['RSI'].iloc[-1]
-            prompt = f"{sel_ticker} 현재가 {l_p:.2f}, RSI {l_r:.2f}. 투자 전략 요약해줘."
-            
-            # 여기서 자동 매칭 발생!
-            result_text, used_model = safe_generate_content(prompt)
-            
-            status.empty()
-            st.success(f"✅ 분석 완료 (사용 모델: {used_model})")
-            st.info(result_text)
-        except Exception as e:
-            status.empty()
-            if "429" in str(e):
-                st.error("🚨 사용량 초과! 30초만 쉬었다가 다시 눌러주세요.")
-            else:
-                st.error(f"⚠️ {str(e)}")
-
-# ---------------------------------------------------------
-# 2. 사이드바 입력 (소수점 지원)
+# 2. 사이드바 및 포트폴리오 데이터 (소수점 지원)
 # ---------------------------------------------------------
 st.sidebar.header("📝 Portfolio Inputs")
 if st.sidebar.button("🔄 Refresh Data"):
@@ -112,8 +65,7 @@ default_data = pd.DataFrame([
 ])
 
 edited_df = st.sidebar.data_editor(
-    default_data,
-    num_rows="dynamic",
+    default_data, num_rows="dynamic",
     column_config={
         "Market": st.column_config.SelectboxColumn("Market", options=["🇺🇸 US", "🇰🇷 KOSPI", "🇰🇷 KOSDAQ", "🇺🇸 Coin"], required=True),
         "Ticker": st.column_config.TextColumn("Ticker"),
@@ -131,7 +83,7 @@ if edited_df.empty:
 # ---------------------------------------------------------
 # 3. 데이터 로딩 및 계산
 # ---------------------------------------------------------
-with st.spinner('시장 데이터를 불러오는 중... ⏳'):
+with st.spinner('데이터를 실시간으로 가져오는 중...'):
     @st.cache_data(ttl=600)
     def fetch_data(ticker_list):
         download_list = ticker_list + ["^GSPC", "KRW=X"]
@@ -183,7 +135,7 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
 # ---------------------------------------------------------
-# 4. 차트 출력 영역
+# 4. 포트폴리오 성과 섹션
 # ---------------------------------------------------------
 st.markdown(f"### 💰 Portfolio Status ({target_currency})")
 c1, c2, c3 = st.columns(3)
@@ -194,21 +146,20 @@ c3.metric("Profit/Loss", f"{target_sym}{current_value-total_invested:,.0f}", del
 st.subheader("📈 Portfolio Growth")
 mask = portfolio_history > 0
 fig_growth = go.Figure()
-fig_growth.add_trace(go.Scatter(x=portfolio_history[mask].index, y=portfolio_history[mask], name="자산 가치", line=dict(color='#FF4B4B', width=3)))
-fig_growth.add_trace(go.Scatter(x=invested_history[mask].index, y=invested_history[mask], name="투자 원금", line=dict(color='gray', dash='dash')))
+fig_growth.add_trace(go.Scatter(x=portfolio_history[mask].index, y=portfolio_history[mask], name="Value", line=dict(color='#FF4B4B', width=3)))
+fig_growth.add_trace(go.Scatter(x=invested_history[mask].index, y=invested_history[mask], name="Capital", line=dict(color='gray', dash='dash')))
 st.plotly_chart(fig_growth, use_container_width=True)
 
-col_bench, col_heat = st.columns(2)
-with col_bench:
+col1, col2 = st.columns(2)
+with col1:
     st.subheader("🆚 vs S&P 500")
     my_ret = (portfolio_history / invested_history - 1) * 100
     sp_ret = (sp500_history.loc[earliest_date:] / sp500_history.loc[earliest_date:].iloc[0] - 1) * 100
     fig_b = go.Figure()
-    fig_b.add_trace(go.Scatter(x=my_ret[mask].index, y=my_ret[mask], name="내 포트폴리오", line=dict(color='#FF4B4B')))
+    fig_b.add_trace(go.Scatter(x=my_ret[mask].index, y=my_ret[mask], name="My Port", line=dict(color='#FF4B4B')))
     fig_b.add_trace(go.Scatter(x=sp_ret.index, y=sp_ret, name="S&P 500", line=dict(color='blue', dash='dot')))
     st.plotly_chart(fig_b, use_container_width=True)
-
-with col_heat:
+with col2:
     st.subheader("🔥 Correlation Heatmap")
     st.plotly_chart(px.imshow(raw_data.pct_change().corr(), text_auto=".2f", color_continuous_scale="RdBu_r"), use_container_width=True)
 
@@ -216,57 +167,53 @@ st.subheader("🧾 Holdings Detail")
 st.dataframe(df_details.style.format({"Qty":"{:,.6f}", "Avg Buy":"{:,.2f}", "Current":"{:,.2f}", "Value":f"{target_sym}{{:,.0f}}", "Return (%)":"{:,.2f}%", "Weight (%)":"{:,.1f}%"}).background_gradient(cmap='RdYlGn', subset=['Return (%)']), use_container_width=True)
 
 # ---------------------------------------------------------
-# 5. 기술적 분석 (에러 수정됨!)
+# 5. 기술적 분석 & AI (여기에 sel_ticker 정의가 완벽히 들어감)
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 Detailed Technical Analysis")
 sel_ticker = st.selectbox("분석 종목 선택", df_details["Ticker"].unique())
-rt_sel = ticker_map[sel_ticker]; tech_df = raw_data[rt_sel].to_frame(name="Close").iloc[-500:]
 
+# sel_ticker가 정의된 직후에 데이터를 가공합니다.
+rt_sel = ticker_map[sel_ticker]; tech_df = raw_data[rt_sel].to_frame(name="Close").iloc[-500:]
 for ma in [5, 20, 60, 120, 200]: tech_df[f'MA{ma}'] = tech_df['Close'].rolling(window=ma).mean()
 tech_df['Std_20'] = tech_df['Close'].rolling(window=20).std()
-tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2)
-tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
+tech_df['Upper'] = tech_df['MA20'] + (tech_df['Std_20'] * 2); tech_df['Lower'] = tech_df['MA20'] - (tech_df['Std_20'] * 2)
 delta = tech_df['Close'].diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
 tech_df['RSI'] = 100 - (100 / (1 + (gain / loss)))
 
+# 차트 그리기
 fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, row_heights=[0.7, 0.3])
-
-# ✅ 에러 수정 포인트: showlegend 위치를 line 밖으로 뺐습니다.
-fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='rgba(200,200,200,0)'), name='Upper BB', showlegend=False), row=1, col=1)
-fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='rgba(200,200,200,0)'), fill='tonexty', fillcolor='rgba(200,200,200,0.2)', name='BB Range', showlegend=False), row=1, col=1)
-
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Upper'], line=dict(color='rgba(200,200,200,0)'), showlegend=False), row=1, col=1)
+fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Lower'], line=dict(color='rgba(200,200,200,0)'), fill='tonexty', fillcolor='rgba(200,200,200,0.2)', showlegend=False), row=1, col=1)
 colors = {'MA5':'pink', 'MA20':'orange', 'MA60':'green', 'MA120':'purple', 'MA200':'darkred'}
-for ma, color in colors.items():
-    fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df[ma], line=dict(color=color, width=1), name=ma), row=1, col=1)
-
+for ma, color in colors.items(): fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df[ma], line=dict(color=color, width=1), name=ma), row=1, col=1)
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['Close'], line=dict(color='blue', width=2), name='Price'), row=1, col=1)
 fig_tech.add_trace(go.Scatter(x=tech_df.index, y=tech_df['RSI'], line=dict(color='magenta'), name='RSI'), row=2, col=1)
-fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-fig_tech.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+fig_tech.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1); fig_tech.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 fig_tech.update_layout(height=800, template="plotly_white", hovermode="x unified")
 st.plotly_chart(fig_tech, use_container_width=True)
 
-# ---------------------------------------------------------
-# 6. AI 분석
-# ---------------------------------------------------------
-col_ai1, col_ai2 = st.columns(2)
-with col_ai1:
-    if st.button(f"🔍 AI {sel_ticker} 기술적 분석"):
+# AI 버튼들
+c_ai1, c_ai2 = st.columns(2)
+with c_ai1:
+    if st.button(f"🔍 AI {sel_ticker} 분석"):
         if not api_key: st.error("❌ API Key를 설정해주세요.")
         else:
-            with st.spinner("분석 중..."):
+            with st.spinner("최적 모델 매칭 및 분석 중..."):
                 try:
-                    prompt = f"{sel_ticker} 현재가 {tech_df['Close'].iloc[-1]:.2f}, RSI {tech_df['RSI'].iloc[-1]:.2f}. 대응 전략 요약해줘."
-                    st.info(safe_generate_content(prompt))
-                except Exception as e: st.error(f"AI 에러: {str(e)}")
-
-with col_ai2:
+                    p = f"{sel_ticker} 현재가 {tech_df['Close'].iloc[-1]:.2f}, RSI {tech_df['RSI'].iloc[-1]:.2f}. 전략 3줄 요약."
+                    txt, model_name = safe_generate_content(p)
+                    st.success(f"✅ 완료 (Model: {model_name})")
+                    st.info(txt)
+                except Exception as e: st.error(str(e))
+with c_ai2:
     if st.button("🤖 전체 포트폴리오 진단"):
         if not api_key: st.error("❌ API Key를 설정해주세요.")
         else:
-            with st.spinner("진단 중..."):
+            with st.spinner("포트폴리오 진단 중..."):
                 try:
                     summary = df_details[["Ticker", "Return (%)", "Weight (%)"]].to_string(index=False)
-                    st.success("진단 완료!"); st.markdown(safe_generate_content(f"포트폴리오 분석해줘:\n{summary}"))
-                except Exception as e: st.error(f"AI 에러: {str(e)}")
+                    txt, model_name = safe_generate_content(f"포트폴리오 진단해줘:\n{summary}")
+                    st.success(f"✅ 완료 (Model: {model_name})")
+                    st.markdown(txt)
+                except Exception as e: st.error(str(e))
