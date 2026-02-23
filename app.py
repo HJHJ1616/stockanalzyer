@@ -128,7 +128,7 @@ with st.spinner('시장 데이터를 불러오는 중... ⏳'):
         invested_history = invested_history.add(cap_val, fill_value=0)
         details.append({"Ticker": row["Ticker"], "Qty": row["Qty"], "Avg Buy": row["Price"], "Current": raw_data[rt].iloc[-1], "Value": val_converted.iloc[-1], "Return (%)": ((raw_data[rt].iloc[-1] - row["Price"]) / row["Price"]) * 100})
 
-    total_invest invested_history.iloc[-1]; current_value = portfolio_history.iloc[-1]
+    total_invested invested_history.iloc[-1]; current_value = portfolio_history.iloc[-1]
     df_details = pd.DataFrame(details)
     df_details["Weight (%)"] = (df_details["Value"] / current_value * 100).fillna(0)
 
